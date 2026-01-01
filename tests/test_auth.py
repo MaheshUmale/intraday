@@ -1,32 +1,46 @@
 import unittest
-from unittest.mock import Mock, patch, call
+from unittest.mock import patch, MagicMock
 from trading_bot.authentication.auth import UpstoxAuthenticator
 import os
 
-class TestAuth(unittest.TestCase):
-
-    def setUp(self):
-        self.authenticator = UpstoxAuthenticator()
-
+class TestUpstoxAuthenticator(unittest.TestCase):
+    @patch('trading_bot.authentication.auth.load_dotenv')
     @patch('trading_bot.authentication.auth.set_key')
-    @patch.dict(os.environ, {}, clear=True)
-    def test_store_tokens(self, mock_set_key):
-        mock_api_response = Mock()
-        mock_api_response.access_token = "test_access_token"
-        mock_api_response.refresh_token = "test_refresh_token"
+    @patch('upstox_client.Configuration')
+    @patch('upstox_client.ApiClient')
+    @patch('upstox_client.UserApi')
+    def test_get_api_client_with_valid_token(self, mock_user_api, mock_api_client, mock_configuration, mock_set_key, mock_load_dotenv):
+        # Arrange
+        with patch.dict(os.environ, {'UPSTOX_ACCESS_TOKEN': 'valid_token'}):
+            mock_user_api.return_value.get_profile.return_value = True # Simulate a successful API call
+            authenticator = UpstoxAuthenticator()
 
-        self.authenticator._store_tokens(mock_api_response)
+            # Act
+            api_client = authenticator.get_api_client()
 
-        # Check that set_key was called with the correct arguments
-        calls = [
-            call(".env", "UPSTOX_ACCESS_TOKEN", "test_access_token"),
-            call(".env", "UPSTOX_REFRESH_TOKEN", "test_refresh_token")
-        ]
-        mock_set_key.assert_has_calls(calls, any_order=True)
+            # Assert
+            self.assertIsNotNone(api_client)
+            mock_user_api.return_value.get_profile.assert_called_once()
+            mock_load_dotenv.assert_called_once()
 
-        # Check that the environment variables are set
-        self.assertEqual(os.environ["UPSTOX_ACCESS_TOKEN"], "test_access_token")
-        self.assertEqual(os.environ["UPSTOX_REFRESH_TOKEN"], "test_refresh_token")
+    @patch('trading_bot.authentication.auth.load_dotenv')
+    @patch('trading_bot.authentication.auth.set_key')
+    @patch('upstox_client.LoginApi')
+    @patch('builtins.input', return_value='test_auth_code')
+    def test_login_and_get_client(self, mock_input, mock_login_api, mock_set_key, mock_load_dotenv):
+        # Arrange
+        mock_token_response = MagicMock()
+        mock_token_response.access_token = 'new_access_token'
+        mock_login_api.return_value.token.return_value = mock_token_response
+        authenticator = UpstoxAuthenticator()
+
+        # Act
+        api_client = authenticator._login_and_get_client()
+
+        # Assert
+        self.assertIsNotNone(api_client)
+        mock_set_key.assert_called_once_with('.env', "UPSTOX_ACCESS_TOKEN", 'new_access_token')
+        mock_load_dotenv.assert_called_once()
 
 if __name__ == '__main__':
     unittest.main()

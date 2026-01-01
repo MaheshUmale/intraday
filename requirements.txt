@@ -2,3 +2,4 @@ upstox-client
 python-dotenv
 pandas
 pandas-ta
+requests
