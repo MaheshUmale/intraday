@@ -15,13 +15,13 @@ class TestExecution(unittest.TestCase):
     @patch('trading_bot.execution.execution.logging.info')
     def test_place_order_paper_trading(self, mock_logging_info):
         config.PAPER_TRADING = True
-        self.order_manager.place_order(1, "I", "DAY", 0, "test_token", "MARKET", "BUY")
+        self.order_manager.place_order(1, "I", "DAY", 0, "test_token", "MARKET", "BUY", "test_tag")
         mock_logging_info.assert_called_with("PAPER TRADE: BUY 1 of test_token at 0")
         self.mock_order_api.place_order.assert_not_called()
 
     def test_place_order_live_trading(self):
         config.PAPER_TRADING = False
-        self.order_manager.place_order(1, "I", "DAY", 0, "test_token", "MARKET", "BUY")
+        self.order_manager.place_order(1, "I", "DAY", 0, "test_token", "MARKET", "BUY", "test_tag")
         self.mock_order_api.place_order.assert_called_once()
 
     @patch('trading_bot.execution.execution.logging.info')

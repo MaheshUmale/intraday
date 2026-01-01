@@ -31,3 +31,6 @@ EXCHANGE = "NSE"
 
 # Paper trading mode
 PAPER_TRADING = True
+
+# Advanced Volume Analysis
+USE_ADVANCED_VOLUME_ANALYSIS = True

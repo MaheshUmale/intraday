@@ -1,6 +1,6 @@
 import os
 import upstox_client
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 import logging
 
 load_dotenv()
@@ -51,23 +51,12 @@ class UpstoxAuthenticator:
         self.access_token = api_response.access_token
         os.environ["UPSTOX_ACCESS_TOKEN"] = self.access_token
 
-        # Read existing .env file
-        if os.path.exists(".env"):
-            with open(".env", "r") as f:
-                lines = f.readlines()
-        else:
-            lines = []
-
-        # Write new values, updating existing ones
-        with open(".env", "w") as f:
-            for line in lines:
-                if not line.startswith("UPSTOX_ACCESS_TOKEN") and not line.startswith("UPSTOX_REFRESH_TOKEN"):
-                    f.write(line)
-            f.write(f"UPSTOX_ACCESS_TOKEN='{self.access_token}'\n")
-            if hasattr(api_response, 'refresh_token') and api_response.refresh_token:
-                self.refresh_token = api_response.refresh_token
-                os.environ["UPSTOX_REFRESH_TOKEN"] = self.refresh_token
-                f.write(f"UPSTOX_REFRESH_TOKEN='{self.refresh_token}'\n")
+        dotenv_path = ".env"
+        set_key(dotenv_path, "UPSTOX_ACCESS_TOKEN", self.access_token)
+        if hasattr(api_response, 'refresh_token') and api_response.refresh_token:
+            self.refresh_token = api_response.refresh_token
+            os.environ["UPSTOX_REFRESH_TOKEN"] = self.refresh_token
+            set_key(dotenv_path, "UPSTOX_REFRESH_TOKEN", self.refresh_token)
 
     def refresh_access_token(self):
         """Refreshes the access token using the refresh token."""

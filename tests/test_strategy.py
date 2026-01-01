@@ -21,12 +21,12 @@ class TestStrategy(unittest.TestCase):
         self.assertEqual(calculate_microstructure_score(90, 90, 90, 0, 0), 0)
 
     def test_calculate_stop_loss(self):
-        self.assertAlmostEqual(calculate_stop_loss(10, "Scalp", 100, "BUY"), 93.0)
-        self.assertAlmostEqual(calculate_stop_loss(10, "Hunter", 100, "BUY"), 88.0)
-        self.assertAlmostEqual(calculate_stop_loss(10, "P2P Trend", 100, "BUY"), 85.0)
-        self.assertAlmostEqual(calculate_stop_loss(10, "Scalp", 100, "SELL"), 107.0)
-        self.assertAlmostEqual(calculate_stop_loss(10, "Hunter", 100, "SELL"), 112.0)
-        self.assertAlmostEqual(calculate_stop_loss(10, "P2P Trend", 100, "SELL"), 115.0)
+        self.assertAlmostEqual(calculate_stop_loss(10, "Scalp", 100, "BULL"), 93.0)
+        self.assertAlmostEqual(calculate_stop_loss(10, "Hunter", 100, "BULL"), 88.0)
+        self.assertAlmostEqual(calculate_stop_loss(10, "P2P Trend", 100, "BULL"), 85.0)
+        self.assertAlmostEqual(calculate_stop_loss(10, "Scalp", 100, "BEAR"), 107.0)
+        self.assertAlmostEqual(calculate_stop_loss(10, "Hunter", 100, "BEAR"), 112.0)
+        self.assertAlmostEqual(calculate_stop_loss(10, "P2P Trend", 100, "BEAR"), 115.0)
 
     def test_calculate_probability_score(self):
         self.assertEqual(calculate_probability_score(True, True, True, True), 100)

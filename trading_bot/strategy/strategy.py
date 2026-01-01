@@ -40,6 +40,8 @@ def find_atm_strike(price):
     return int(round(price / 100) * 100)
 
 class HunterTrade(TacticalTemplate):
+    # Note: HunterTrade does not have its own exit logic.
+    # Exits are handled by the main application's stop-loss monitoring.
     def execute(self, **kwargs):
         """
         Executes the Hunter Trade strategy.
@@ -55,18 +57,20 @@ class HunterTrade(TacticalTemplate):
         if abs(score) >= config.SCORE_THRESHOLD:
             # Calculate probability score
             pcr_alignment = (pcr > 1.0 and score > 0) or (pcr < 1.0 and score < 0)
+            index_sync = True  # Placeholder
+            value_area = price > kwargs.get('hunter_zone')['low'] and price < kwargs.get('hunter_zone')['high']
             probability_score = calculate_probability_score(
                 pcr_alignment=pcr_alignment,
-                index_sync=True, # Placeholder
+                index_sync=index_sync,
                 score_force=abs(score) > 10,
-                value_area=True # Placeholder
+                value_area=value_area
             )
 
             if probability_score < config.PROBABILITY_THRESHOLD:
                 logging.info(f"Probability score {probability_score} is below threshold. Skipping trade.")
                 return
 
-            transaction_type = "BUY" if score > 0 else "SELL"
+            transaction_type = "BUY"
 
             # Find the ATM strike and the corresponding instrument key
             atm_strike = find_atm_strike(price)
@@ -74,10 +78,10 @@ class HunterTrade(TacticalTemplate):
 
             for item in option_chain:
                 if hasattr(item, 'strike_price') and item.strike_price == atm_strike:
-                    if transaction_type == "BUY" and hasattr(item, 'call_options'):
+                    if score > 0 and hasattr(item, 'call_options'):
                         option_instrument_key = item.call_options.instrument_key
                         break
-                    elif transaction_type == "SELL" and hasattr(item, 'put_options'):
+                    elif score < 0 and hasattr(item, 'put_options'):
                         option_instrument_key = item.put_options.instrument_key
                         break
 
@@ -86,6 +90,9 @@ class HunterTrade(TacticalTemplate):
                 return
 
             # Place a market order
+            vpa_signal = kwargs.get('vpa_signal')
+            logging.info(f"Placing Hunter trade for {instrument_key}. Score: {score}, Probability: {probability_score}, VPA: {vpa_signal}")
+            trade_logger.info(f"ENTRY: Hunter, {instrument_key}, {transaction_type}, {price}, {score}, {probability_score}, {vpa_signal}")
             order_response = self.order_manager.place_order(
                 quantity=1,
                 product="I",
@@ -101,8 +108,9 @@ class HunterTrade(TacticalTemplate):
                 # Calculate and place stop-loss order
                 df = calculate_atr(df)
                 atr = df['atr'].iloc[-1]
-                last_swing = find_recent_swing(df)
-                stop_loss_price = calculate_stop_loss(atr, "Hunter", last_swing, transaction_type)
+                direction = 'BULL' if score > 0 else 'BEAR'
+                last_swing = find_recent_swing(df, direction)
+                stop_loss_price = calculate_stop_loss(atr, "Hunter", last_swing, direction)
 
                 self.order_manager.place_gtt_order(
                     instrument_token=option_instrument_key,
@@ -118,7 +126,8 @@ class HunterTrade(TacticalTemplate):
                     'instrument_key': option_instrument_key,
                     'transaction_type': transaction_type,
                     'entry_price': price,
-                    'stop_loss_price': stop_loss_price
+                    'stop_loss_price': stop_loss_price,
+                    'direction': 'BULL' if score > 0 else 'BEAR'
                 }
 
 class P2PTrend(TacticalTemplate):
@@ -132,15 +141,27 @@ class P2PTrend(TacticalTemplate):
         open_positions = kwargs.get('open_positions')
 
         if instrument_key in open_positions:
+            position = open_positions[instrument_key]
             # Hold the position until the score flips
-            if (score > 0 and open_positions[instrument_key]['transaction_type'] == "SELL") or \
-               (score < 0 and open_positions[instrument_key]['transaction_type'] == "BUY"):
+            if (score > 0 and position['direction'] == "BEAR") or \
+               (score < 0 and position['direction'] == "BULL"):
                 logging.info(f"Score flipped for {instrument_key}. Closing position.")
-                # (Implement logic to close the position)
+                trade_logger.info(f"EXIT: P2P Trend, {instrument_key}, {position['transaction_type']}, {price}, {score}")
+                self.order_manager.place_order(
+                    quantity=1,
+                    product="I",
+                    validity="DAY",
+                    price=0,
+                    instrument_token=position['instrument_key'],
+                    order_type="MARKET",
+                    transaction_type="SELL",
+                    tag="p2p_trend_exit"
+                )
+                self.order_manager.close_paper_position(position['instrument_key'])
                 del open_positions[instrument_key]
         elif abs(score) >= config.SCORE_THRESHOLD:
             # Enter a new position
-            transaction_type = "BUY" if score > 0 else "SELL"
+            transaction_type = "BUY"
 
             # Find the ATM strike and the corresponding instrument key
             atm_strike = find_atm_strike(price)
@@ -148,10 +169,10 @@ class P2PTrend(TacticalTemplate):
 
             for item in kwargs.get('option_chain'):
                 if hasattr(item, 'strike_price') and item.strike_price == atm_strike:
-                    if transaction_type == "BUY" and hasattr(item, 'call_options'):
+                    if score > 0 and hasattr(item, 'call_options'):
                         option_instrument_key = item.call_options.instrument_key
                         break
-                    elif transaction_type == "SELL" and hasattr(item, 'put_options'):
+                    elif score < 0 and hasattr(item, 'put_options'):
                         option_instrument_key = item.put_options.instrument_key
                         break
 
@@ -159,6 +180,9 @@ class P2PTrend(TacticalTemplate):
                 logging.warning(f"Could not find ATM option for {instrument_key}. Skipping trade.")
                 return
 
+            vpa_signal = kwargs.get('vpa_signal')
+            logging.info(f"Placing P2P Trend trade for {instrument_key}. Score: {score}, VPA: {vpa_signal}")
+            trade_logger.info(f"ENTRY: P2P Trend, {instrument_key}, {transaction_type}, {price}, {score}, {vpa_signal}")
             order_response = self.order_manager.place_order(
                 quantity=1,
                 product="I",
@@ -173,8 +197,9 @@ class P2PTrend(TacticalTemplate):
             if order_response:
                 df = calculate_atr(kwargs.get('df'))
                 atr = df['atr'].iloc[-1]
-                last_swing = find_recent_swing(df)
-                stop_loss_price = calculate_stop_loss(atr, "P2P Trend", last_swing, transaction_type)
+                direction = 'BULL' if score > 0 else 'BEAR'
+                last_swing = find_recent_swing(df, direction)
+                stop_loss_price = calculate_stop_loss(atr, "P2P Trend", last_swing, direction)
 
                 self.order_manager.place_gtt_order(
                     instrument_token=option_instrument_key,
@@ -189,13 +214,17 @@ class P2PTrend(TacticalTemplate):
                     'instrument_key': option_instrument_key,
                     'transaction_type': transaction_type,
                     'entry_price': price,
-                    'stop_loss_price': stop_loss_price
+                    'stop_loss_price': stop_loss_price,
+                    'direction': 'BULL' if score > 0 else 'BEAR'
                 }
 
 class Scalp(TacticalTemplate):
     def execute(self, **kwargs):
-        # Implementation of the Scalp logic
-        pass
+        """
+        Executes the Scalp trading strategy.
+        Placeholder implementation.
+        """
+        logging.info("Scalp strategy is not yet implemented.")
 
 class MeanReversion(TacticalTemplate):
     def execute(self, **kwargs):
@@ -209,31 +238,44 @@ class MeanReversion(TacticalTemplate):
         open_positions = kwargs.get('open_positions')
 
         if instrument_key in open_positions:
+            position = open_positions[instrument_key]
             # Close the position if the price has reverted to the mean
-            if (open_positions[instrument_key]['transaction_type'] == "BUY" and price >= evwma_1m) or \
-               (open_positions[instrument_key]['transaction_type'] == "SELL" and price <= evwma_1m):
+            if (position['direction'] == "BULL" and price >= evwma_1m) or \
+               (position['direction'] == "BEAR" and price <= evwma_1m):
                 logging.info(f"Price reverted for {instrument_key}. Closing position.")
-                # (Implement logic to close the position)
+                trade_logger.info(f"EXIT: Mean Reversion, {instrument_key}, {position['transaction_type']}, {price}")
+                self.order_manager.place_order(
+                    quantity=1,
+                    product="I",
+                    validity="DAY",
+                    price=0,
+                    instrument_token=position['instrument_key'],
+                    order_type="MARKET",
+                    transaction_type="SELL",
+                    tag="mean_reversion_exit"
+                )
+                self.order_manager.close_paper_position(position['instrument_key'])
                 del open_positions[instrument_key]
         else:
             # Enter a new position if the price has stretched away from the EVWMA
-            transaction_type = None
+            score = 0
             if price > evwma_5m * 1.01: # 1% above EVWMA
-                transaction_type = "SELL"
+                score = -1
             elif price < evwma_5m * 0.99: # 1% below EVWMA
-                transaction_type = "BUY"
+                score = 1
 
-            if transaction_type:
+            if score != 0:
+                transaction_type = "BUY"
                 # Find the ATM strike and the corresponding instrument key
                 atm_strike = find_atm_strike(price)
                 option_instrument_key = None
 
                 for item in kwargs.get('option_chain'):
                     if hasattr(item, 'strike_price') and item.strike_price == atm_strike:
-                        if transaction_type == "BUY" and hasattr(item, 'call_options'):
+                        if score > 0 and hasattr(item, 'call_options'):
                             option_instrument_key = item.call_options.instrument_key
                             break
-                        elif transaction_type == "SELL" and hasattr(item, 'put_options'):
+                        elif score < 0 and hasattr(item, 'put_options'):
                             option_instrument_key = item.put_options.instrument_key
                             break
 
@@ -241,6 +283,9 @@ class MeanReversion(TacticalTemplate):
                     logging.warning(f"Could not find ATM option for {instrument_key}. Skipping trade.")
                     return
 
+                vpa_signal = kwargs.get('vpa_signal')
+                logging.info(f"Placing Mean Reversion trade for {instrument_key}. Price: {price}, EVWMA_5m: {evwma_5m}, VPA: {vpa_signal}")
+                trade_logger.info(f"ENTRY: Mean Reversion, {instrument_key}, {transaction_type}, {price}, EVWMA_5m: {evwma_5m}, {vpa_signal}")
                 order_response = self.order_manager.place_order(
                     quantity=1,
                     product="I",
@@ -255,8 +300,9 @@ class MeanReversion(TacticalTemplate):
                 if order_response:
                     df = calculate_atr(kwargs.get('df'))
                     atr = df['atr'].iloc[-1]
-                    last_swing = find_recent_swing(df)
-                    stop_loss_price = calculate_stop_loss(atr, "Scalp", last_swing, transaction_type) # Using Scalp ATR multiplier
+                    direction = 'BULL' if score > 0 else 'BEAR'
+                    last_swing = find_recent_swing(df, direction)
+                    stop_loss_price = calculate_stop_loss(atr, "Scalp", last_swing, direction) # Using Scalp ATR multiplier
 
                     self.order_manager.place_gtt_order(
                         instrument_token=option_instrument_key,
@@ -271,7 +317,8 @@ class MeanReversion(TacticalTemplate):
                         'instrument_key': option_instrument_key,
                         'transaction_type': transaction_type,
                         'entry_price': price,
-                        'stop_loss_price': stop_loss_price
+                        'stop_loss_price': stop_loss_price,
+                        'direction': 'BULL' if score > 0 else 'BEAR'
                     }
 
 def calculate_pcr(option_chain):
@@ -334,7 +381,7 @@ def calculate_microstructure_score(price, evwma_1m, evwma_5m, evwma_1m_slope, ev
 
     return score
 
-def calculate_stop_loss(atr, trade_type, last_swing, transaction_type):
+def calculate_stop_loss(atr, trade_type, last_swing, direction):
     """
     Calculates the stop-loss based on ATR, trade type, and the last swing.
     """
@@ -347,9 +394,9 @@ def calculate_stop_loss(atr, trade_type, last_swing, transaction_type):
     volatility_buffer = multiplier * atr
 
     # The stop-loss is placed slightly beyond the last swing
-    if transaction_type == "BUY":
+    if direction == "BULL":
         stop_loss = last_swing - volatility_buffer
-    else: # SELL
+    else: # BEAR
         stop_loss = last_swing + volatility_buffer
 
     return stop_loss
@@ -376,16 +423,66 @@ def calculate_atr(df, length=14):
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=length)
     return df
 
-def find_recent_swing(df, n=20):
+def find_recent_swing(df, direction, n=20):
     """
-    Finds the most recent swing high or low from the last n candles.
+    Finds the most recent swing high or low from the last n candles based on the trade direction.
     """
     df_slice = df.iloc[-n:]
-    swing_high = df_slice['high'].max()
-    swing_low = df_slice['low'].min()
+    if direction == 'BULL':
+        return df_slice['low'].min()
+    else: # BEAR
+        return df_slice['high'].max()
 
-    # Determine if the most recent swing was a high or a low
-    if df_slice['high'].idxmax() > df_slice['low'].idxmin():
-        return swing_high
-    else:
-        return swing_low
+def detect_pocket_pivot_volume(df, lookback=10):
+    """
+    Detects Pocket Pivot Volume (PPV).
+    """
+    latest_bar = df.iloc[-1]
+    if latest_bar['close'] <= latest_bar['open']:
+        return False
+
+    lookback_df = df.iloc[-lookback-1:-1]
+    down_volume = lookback_df[lookback_df['close'] < lookback_df['open']]['volume']
+
+    if down_volume.empty:
+        return False
+
+    return latest_bar['volume'] > down_volume.max()
+
+def detect_pivot_negative_volume(df, lookback=10):
+    """
+    Detects Pivot Negative Volume (PNV).
+    """
+    latest_bar = df.iloc[-1]
+    if latest_bar['close'] >= latest_bar['open']:
+        return False
+
+    lookback_df = df.iloc[-lookback-1:-1]
+    up_volume = lookback_df[lookback_df['close'] > lookback_df['open']]['volume']
+
+    if up_volume.empty:
+        return False
+
+    return latest_bar['volume'] > up_volume.max()
+
+def detect_accumulation(df):
+    """
+    Detects accumulation.
+    """
+    latest_bar = df.iloc[-1]
+    range = latest_bar['high'] - latest_bar['low']
+    avg_range = (df['high'] - df['low']).mean()
+    avg_volume = df['volume'].mean()
+
+    return latest_bar['volume'] > avg_volume * 1.5 and range < avg_range * 0.7 and latest_bar['close'] > latest_bar['open']
+
+def detect_distribution(df):
+    """
+    Detects distribution.
+    """
+    latest_bar = df.iloc[-1]
+    range = latest_bar['high'] - latest_bar['low']
+    avg_range = (df['high'] - df['low']).mean()
+    avg_volume = df['volume'].mean()
+
+    return latest_bar['volume'] > avg_volume * 1.5 and range < avg_range * 0.7 and latest_bar['close'] < latest_bar['open']
