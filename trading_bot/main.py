@@ -1,0 +1,226 @@
+import time
+import logging
+from datetime import datetime, timedelta, time as dt_time
+import pandas as pd
+from trading_bot.authentication.auth import UpstoxAuthenticator
+from trading_bot.utils.data_handler import DataHandler
+from trading_bot.execution.execution import OrderManager
+from trading_bot.strategy.strategy import classify_day_type, calculate_microstructure_score, calculate_pcr, calculate_evwma, HunterTrade, P2PTrend, Scalp, MeanReversion, DayType
+import trading_bot.config as config
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class TradingBot:
+    """
+    The main class for the trading bot.
+    """
+    def __init__(self):
+        """
+        Initializes the TradingBot.
+        """
+        self.api_client = None
+        self.data_handler = None
+        self.order_manager = None
+        self.hunter_zone = {}
+        self.strategies = {}
+        self.open_positions = {}
+
+    def run(self):
+        """
+        Main function to run the trading bot.
+        """
+        logging.info("Starting the trading bot...")
+
+        try:
+            # Step 1: Authenticate and get the API client
+            self._authenticate()
+
+            # Step 2: Initialize the data handler and order manager
+            self._initialize_modules()
+
+            # Step 3: Enter the main trading loop
+            self._trading_loop()
+
+        except Exception as e:
+            logging.error(f"An unexpected error occurred in the main run loop: {e}", exc_info=True)
+
+    def _authenticate(self):
+        """
+        Authenticates with the Upstox API.
+        """
+        authenticator = UpstoxAuthenticator()
+        self.api_client = authenticator.get_api_client()
+        if not self.api_client:
+            logging.error("Authentication failed. Exiting.")
+            raise ConnectionError("Failed to authenticate with Upstox API.")
+        logging.info("Authentication successful.")
+
+    def _initialize_modules(self):
+        """
+        Initializes the data handler and order manager.
+        """
+        self.data_handler = DataHandler(self.api_client)
+        self.order_manager = OrderManager(self.api_client)
+        self.strategies = {
+            DayType.BULLISH_TREND: P2PTrend(self.order_manager),
+            DayType.BEARISH_TREND: P2PTrend(self.order_manager),
+            DayType.SIDEWAYS_BULL_TRAP: HunterTrade(self.order_manager),
+            DayType.SIDEWAYS_BEAR_TRAP: HunterTrade(self.order_manager),
+            DayType.SIDEWAYS_CHOPPY: MeanReversion(self.order_manager)
+        }
+        logging.info("Modules initialized.")
+
+    def _trading_loop(self):
+        """
+        The main trading loop.
+        """
+        logging.info("Entering main trading loop...")
+        first_run = True
+        while True:
+            now = datetime.now()
+
+            # Run only during market hours
+            if self._is_market_hours(now):
+                if first_run:
+                    if config.PAPER_TRADING:
+                        self.open_positions = self.order_manager.get_paper_positions()
+                    first_run = False
+                self._execute_daily_tasks(now)
+            else:
+                first_run = True
+
+            # Wait for the next interval
+            time.sleep(60)
+
+    def _is_market_hours(self, now):
+        """
+        Checks if the current time is within market hours.
+        """
+        return dt_time(9, 15) <= now.time() <= dt_time(15, 30)
+
+    def _execute_daily_tasks(self, now):
+        """
+        Executes the daily trading tasks.
+        """
+        market_status = self.data_handler.get_market_status(config.EXCHANGE)
+        if market_status and market_status.status == "open":
+            # Calculate Hunter Zone once at the beginning of the day
+            if not self.hunter_zone:
+                self.calculate_hunter_zone(now)
+
+            # Execute the strategy for each configured instrument
+            for instrument_key in config.INSTRUMENTS:
+                self.execute_strategy(instrument_key)
+
+    def calculate_hunter_zone(self, current_datetime):
+        """
+        Calculates the Hunter Zone for each instrument based on the last 60 minutes
+        of the previous trading day.
+        """
+        logging.info("Calculating Hunter Zone...")
+        to_date = (current_datetime - timedelta(days=1)).strftime('%Y-%m-%d')
+        from_date = (current_datetime - timedelta(days=2)).strftime('%Y-%m-%d')
+
+        for instrument_key in config.INSTRUMENTS:
+            try:
+                candles = self.data_handler.get_historical_candle_data(instrument_key, '1minute', to_date, from_date)
+                if candles:
+                    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+                    # Filter for the last 60 minutes of the previous trading day
+                    last_day_data = df[df['timestamp'].dt.date == pd.to_datetime(to_date).date()]
+                    last_60_min_data = last_day_data[last_day_data['timestamp'].dt.time >= dt_time(14, 30)]
+
+                    if not last_60_min_data.empty:
+                        self.hunter_zone[instrument_key] = {
+                            'high': last_60_min_data['high'].max(),
+                            'low': last_60_min_data['low'].min()
+                        }
+                        logging.info(f"Hunter Zone for {instrument_key}: {self.hunter_zone[instrument_key]}")
+            except Exception as e:
+                logging.error(f"Failed to calculate Hunter Zone for {instrument_key}: {e}", exc_info=True)
+
+    def execute_strategy(self, instrument_key):
+        """
+        Executes the trading strategy for a given instrument.
+        """
+        logging.info(f"Executing strategy for {instrument_key}...")
+
+        # 1. Check for open positions
+        if instrument_key in self.open_positions:
+            logging.info(f"Position already open for {instrument_key}. Skipping.")
+            return
+
+        # 2. Get Hunter Zone
+        if instrument_key not in self.hunter_zone:
+            logging.warning(f"Hunter Zone not available for {instrument_key}. Skipping.")
+            return
+
+        hunter_zone = self.hunter_zone[instrument_key]
+
+        # 2. Get Candle Data
+        today = datetime.now().strftime('%Y-%m-%d')
+        candles = self.data_handler.get_historical_candle_data(instrument_key, '1minute', today, today)
+        if not candles:
+            logging.warning(f"Could not fetch candles for {instrument_key}. Skipping.")
+            return
+
+        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+        opening_price = df['open'].iloc[0]
+
+        # 3. Calculate PCR
+        option_chain = self.data_handler.get_option_chain(instrument_key, datetime.now().strftime('%Y-%m-%d'))
+        if not option_chain:
+            logging.warning(f"Could not fetch option chain for {instrument_key}. Skipping.")
+            return
+
+        pcr = calculate_pcr(option_chain)
+
+        # 4. Classify Day Type
+        day_type = classify_day_type(opening_price, hunter_zone['high'], hunter_zone['low'], pcr)
+
+        # 5. Calculate Microstructure Score
+        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+        # Calculate 1-minute EVWMA
+        df_1m = calculate_evwma(df.copy(), length=20)
+        evwma_1m = df_1m['evwma'].iloc[-1]
+        evwma_1m_slope = df_1m['evwma_slope'].iloc[-1]
+
+        # Calculate 5-minute EVWMA
+        df_5m = df.resample('5T', on='timestamp').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}).dropna()
+        df_5m = calculate_evwma(df_5m, length=20)
+        evwma_5m = df_5m['evwma'].iloc[-1]
+        evwma_5m_slope = df_5m['evwma_slope'].iloc[-1]
+
+        price = df['close'].iloc[-1]
+
+        score = calculate_microstructure_score(price, evwma_1m, evwma_5m, evwma_1m_slope, evwma_5m_slope)
+
+        logging.info(f"Instrument: {instrument_key}, Day Type: {day_type.value}, Score: {score}")
+
+        # 6. Execute Trade
+        strategy = self.strategies.get(day_type)
+        if strategy:
+            strategy.execute(
+                score=score,
+                price=price,
+                instrument_key=instrument_key,
+                hunter_zone=hunter_zone,
+                pcr=pcr,
+                day_type=day_type,
+                option_chain=option_chain,
+                open_positions=self.open_positions,
+                evwma_1m=evwma_1m,
+                evwma_5m=evwma_5m,
+                df=df
+            )
+
+if __name__ == "__main__":
+    bot = TradingBot()
+    bot.run()
