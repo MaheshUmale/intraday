@@ -1,138 +1,150 @@
-This summary serves as the **Master Logic Document** for the algorithmic trading system we have architected. It codifies every structural rule, tactical nuance, and risk management principle discussed, moving away from code to focus entirely on the **Intelligence Framework**.
+# Python-Based Algorithmic Trading System
+
+This document serves as both the **Master Logic Document** and the **User Guide** for the algorithmic trading system. It is designed to provide a comprehensive understanding of the system's architecture, trading intelligence, and operational procedures.
 
 ---
 
-### **Part 1: The Macro Framework – Day Type Classification**
+## **Part 1: How to Set Up and Run the Bot**
 
-The foundational principle of our system is that **Context dictates Tactics**. A strategy that works in a trending market will fail in a sideways market. Therefore, the first task of the engine at 09:15 AM is to classify the "Regime" or **Day Type**.
+This section provides a step-by-step guide to get the trading bot running on your local machine.
 
-#### **1.1 The Reference Zone (The Hunter Zone)**
+### **1.1 Prerequisites**
+*   Python 3.10 or higher.
+*   An active Upstox trading account.
+*   API credentials from the [Upstox Developer Console](https://upstox.com/developer/).
 
-Before the market opens, the engine identifies the **Hunter Zone**, defined as the price range (High and Low) of the **final 60 minutes of the previous trading day**. This zone represents the most recent institutional "fair value" before the close.
+### **1.2 Installation**
 
-#### **1.2 The Five Day Type Regimes**
+1.  **Clone the Repository:**
+    ```bash
+    git clone <repository_url>
+    cd <repository_directory>
+    ```
 
-The Day Type is determined by the relationship between the **Opening Price**, the **Hunter Zone**, and the **Configurable PCR (Put-Call Ratio)** thresholds.
+2.  **Install Dependencies:**
+    It is highly recommended to use a virtual environment.
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+    pip install -r requirements.txt
+    ```
 
-* **Type 1: Bullish Trend Day**
-* **Logic**: Market opens above the Prev Day High (Gap Up) and the PCR is high (e.g., > 1.2).
-* **Character**: Suggests aggressive institutional buying and "Acceptance" of higher prices.
+### **1.3 Configuration (`.env` file)**
 
+Create a file named `.env` in the root of the project directory. This file will store your sensitive API credentials and is ignored by Git.
 
-* **Type 2: Bearish Trend Day**
-* **Logic**: Market opens below the Prev Day Low (Gap Down) and the PCR is low (e.g., < 0.7).
-* **Character**: Suggests aggressive institutional selling and "Acceptance" of lower prices.
+Populate the `.env` file with the following content, replacing the placeholder values with your actual credentials from the Upstox Developer Console:
 
+```plaintext
+UPSTOX_API_KEY="Your_Upstox_API_Key"
+UPSTOX_API_SECRET="Your_Upstox_API_Secret"
+UPSTOX_REDIRECT_URI="https//127.0.0.1:5000/auth/callback" # Or your configured redirect URI
+UPSTOX_ACCESS_TOKEN="" # Leave this empty initially
+```
 
-* **Type 3: Sideways Bull Trap (Hunter Short Context)**
-* **Logic**: Market gaps up above the Prev Day High, but the PCR is bearish or neutral (e.g., < 0.9).
-* **Character**: The "Gap" is unsupported by options sentiment, making it a prime candidate for a "Hunter Rejection."
+### **1.4 First-Time Authentication**
 
+The system uses OAuth2 for secure authentication. You only need to perform this authorization step once. The application will then store and manage the access token for you.
 
-* **Type 4: Sideways Bear Trap (Hunter Long Context)**
-* **Logic**: Market gaps down below the Prev Day Low, but the PCR is bullish (e.g., > 1.1).
-* **Character**: The downward move lacks sentiment conviction, leading to a high probability of a "Mean Reversion" spike.
+1.  **Run the Main Application:**
+    ```bash
+    python -m trading_bot.main
+    ```
 
+2.  **Authorize in Browser:**
+    The first time you run the bot, it will detect that there is no access token. It will print a URL in your console.
+    *   Copy this URL.
+    *   Paste it into your web browser.
+    *   Log in with your Upstox credentials and grant the application access.
 
-* **Type 5: Sideways/Choppy Day**
-* **Logic**: Market opens inside the previous day's range with neutral PCR.
-* **Character**: Most trades will be "Responsive" (buying lows, selling highs) rather than "Initiative" (trending).
+3.  **Enter the Authorization Code:**
+    After granting access, you will be redirected to your `REDIRECT_URI`. The URL in your browser's address bar will now contain a parameter called `code`. It will look something like this:
+    `https://127.0.0.1:5000/auth/callback?code=**<long_authorization_code>**`
 
+    *   Copy the value of the `code` parameter.
+    *   Paste this code back into the terminal where the bot is prompting for it.
 
+The application will then automatically fetch the access token, save it to your `.env` file, and proceed with its normal operation. You will not have to do this again unless your token is revoked.
 
----
+### **1.5 Running the Bot and Tests**
 
-### **Part 2: The Tactical Templates (Execution Archetypes)**
+*   **To Run the Trading Bot:**
+    ```bash
+    python -m trading_bot.main
+    ```
 
-Once the Day Type is set, the engine "unlocks" specific tactical templates. A professional system never applies the same exit or SL logic to a scalp as it does to a trend trade.
+*   **To Run the Unit Tests:**
+    ```bash
+    python -m unittest discover -s tests
+    ```
 
-#### **2.1 The Hunter Trade (The Core Alpha)**
+### **1.6 System Configuration (`trading_bot/config.py`)**
 
-The Hunter trade focuses on the first 45 minutes of trade (09:15 – 10:00). It is designed to profit from the "Morning Trap."
+The `trading_bot/config.py` file allows you to control key system parameters without changing the code:
 
-**The 6 Hunter Combinations (Acceptance vs. Rejection):**
-
-1. **Gap Up Rejection**: Price opens above the zone, spikes higher to induce "FOMO," then the Microstructure Score flips bearish. **Action**: Short back to the EVWMA.
-2. **Gap Up Acceptance**: Price opens above the zone, tests the High, but the Score remains strongly bullish. **Action**: Long for a Trend Day.
-3. **Gap Down Rejection**: Price opens below the zone, induces panic selling, then the Score flips bullish at a structural pivot. **Action**: Long.
-4. **Gap Down Acceptance**: Price holds below the Low with increasing bearish volume force. **Action**: Short.
-5. **Inside Initiative**: Price opens inside the zone but breaks a boundary with a high Confluence Score.
-6. **Inside Responsive**: Price tests a boundary, fails to break, and returns to the center.
-
-#### **2.2 Point-to-Point (P2P) Trend**
-
-This template is for high-conviction moves. It ignores minor mean-reversions and stays in the trade as long as the **Total Score** remains above the threshold (e.g., +7). It targets "OI Walls" (Option strikes with maximum Open Interest).
-
-#### **2.3 The Scalp (Micro-Momentum)**
-
-Scalps are fast, 1-3 candle moves triggered by **Delta-Price Divergence** (where price moves one way but volume force suggests the other). These have the tightest risk parameters.
-
-#### **2.4 Mean Reversion**
-
-Active only on Sideways days. The price is treated like a rubber band; as it stretches away from the **EVWMA (Elastic Volume Weighted MA)**, the engine looks for exhaustion to trade back to the "Value Area."
-
----
-
-### **Part 3: The Engine – Microstructure Scoring (+/- 12)**
-
-The "brain" of the system is the **Microstructure Confluence Score**. It avoids the lag of traditional indicators by using volume-force logic.
-
-#### **3.1 Multi-Timeframe Alignment**
-
-A trade is only taken when the **1-minute** and **5-minute** timeframes are in "Sync."
-
-* **dyn5 (5 pts)**: Direction of price vs. 5m EVWMA.
-* **dyn1 (1 pt)**: Direction of price vs. 1m EVWMA.
-* **evm5 (5 pts)**: Slope/Momentum of the 5m EVWMA.
-* **evm1 (1 pt)**: Slope/Momentum of the 1m EVWMA.
-
-**Total Max Score: +12 (Ultra Bullish) to -12 (Ultra Bearish).**
-A score of **+/- 7** is the minimum threshold for high-conviction entries.
+*   **PAPER_TRADING**: Set to `True` to run in paper trading mode (default). Set to `False` to execute real trades. **Use with caution.**
+*   **USE_ADVANCED_VOLUME_ANALYSIS**: Set to `True` to enable the VPA signal filter. Set to `False` to rely only on the Microstructure Score.
 
 ---
 
-### **Part 4: Pre-emptive Risk Planning (The "Professional" Layer)**
+## **Part 2: The Master Logic Document**
 
-This is where most systems fail. Professional planning happens *before* the order is sent.
+This section codifies the "Intelligence Framework" of the trading system.
 
-#### **4.1 Dynamic Stop-Loss (ATR + Structure)**
+### **2.1 The Logic Loop: From Data to Trade**
 
-We rejected fixed-point Stop Losses (e.g., "30 points") because they are arbitrary. Instead:
+The system operates on a real-time, event-driven loop:
 
-* **The Volatility Buffer**: SL is calculated as a multiple of the **ATR (Average True Range)**.
-* **The Structural Buffer**: The engine looks at the last 10-20 candles to find the "Recent Swing." The SL is placed slightly beyond that swing (the "Non-Obvious" level) to avoid being hunted by "wick" spikes.
+1.  **WebSocket Data Feed**: The bot establishes a WebSocket connection to the Upstox API, subscribing to live ticks for key instruments (Nifty 50, Nifty Bank).
+2.  **1-Minute Candle Aggregation**: The `_on_message` handler receives each tick. It aggregates these ticks into one-minute candles, correctly calculating the `open`, `high`, `low`, `close`, and `volume` for that minute. The volume is calculated by tracking the *change* in the cumulative volume provided by the feed.
+3.  **Strategy Execution Trigger**: At the close of each one-minute candle, the `execute_strategy` function is called for that instrument.
+4.  **Analysis & Filtering**: The system performs a multi-layered analysis:
+    *   Calculates the **Microstructure Confluence Score**.
+    *   (If enabled) Detects **VPA signals** for institutional activity.
+    *   Filters the trade signal based on these analytics.
+5.  **Order Placement**: If a high-conviction trade setup is identified, the `OrderManager` places the order (either a paper trade or a live trade).
+6.  **Live Stop-Loss Monitoring**: Every incoming tick is also used to check the price against the stop-loss levels of any open positions for real-time risk management.
 
-#### **4.2 Trade-Specific SL Multipliers**
+### **2.2 The Macro Framework: Day Type Classification**
 
-* **Scalp**: 0.7x ATR (Very tight, "be right or get out").
-* **Hunter**: 1.2x ATR (Needs room for morning volatility).
-* **P2P Trend**: 1.5x ATR (Gives the trend room to breathe).
+The foundational principle is **Context dictates Tactics**. The engine first classifies the "Regime" or **Day Type**.
 
-#### **4.3 Probability Weighting**
+*   **The Hunter Zone**: The price range (High and Low) of the **final 60 minutes of the previous trading day**. This is the reference for institutional "fair value".
+*   **The Five Day Types**: Determined by the **Opening Price**, the **Hunter Zone**, and the **PCR (Put-Call Ratio)**.
+    1.  **Bullish Trend**: Gap Up + High PCR.
+    2.  **Bearish Trend**: Gap Down + Low PCR.
+    3.  **Sideways Bull Trap**: Gap Up + Bearish PCR (a "trap").
+    4.  **Sideways Bear Trap**: Gap Down + Bullish PCR (a "trap").
+    5.  **Sideways/Choppy**: Opens within the previous day's range.
 
-Every trade is assigned a **Probability Score (0-100%)**:
+### **2.3 The Engine: Microstructure & Volume Analysis**
 
-* **PCR Alignment**: +20% if PCR supports the direction.
-* **Index Sync**: +30% if NIFTY and BANKNIFTY are moving in unison.
-* **Score Force**: +30% if Score is > 10.
-* **Value Area**: +20% if entry is near the VWAP/EVWMA.
-Only trades with **> 75% Probability** are executed with full position size.
+#### **2.3.1 Microstructure Confluence Score (+/- 12)**
 
----
+The "brain" of the system. It uses multi-timeframe EVWMA (Elastic Volume Weighted Moving Average) analysis to generate a real-time momentum score.
 
-### **Part 5: The Reason to Exit (Institutional Exhaustion)**
+*   **dyn5 (5 pts)**: Price vs. 5m EVWMA.
+*   **dyn1 (1 pt)**: Price vs. 1m EVWMA.
+*   **evm5 (5 pts)**: Slope of 5m EVWMA.
+*   **evm1 (1 pt)**: Slope of 1m EVWMA.
 
-The system does not wait for an arbitrary target if the market conditions change. The primary exit signal is the **4x RVOL (Relative Volume) Spike**.
+A score of **+/- 7** is the minimum threshold for a high-conviction entry.
 
-When volume suddenly spikes to 4 times the 20-period average, it signifies **Institutional Climax** (either profit-taking or a massive counter-move). The engine treats this as an immediate exit signal to protect unrealized gains.
+#### **2.3.2 VPA: The Institutional Filter**
 
----
+If `USE_ADVANCED_VOLUME_ANALYSIS` is `True`, the system uses Volume Price Analysis to confirm the Microstructure Score. A trade is only taken if the volume signature supports the price action.
 
-### **Conclusion: The Logic Loop**
+*   **For Bullish Trades (Score > 0)**: The trade requires confirmation from either:
+    *   **Pocket Pivot Volume (PPV)**: High up-volume that exceeds the highest down-volume of the last 10 bars.
+    *   **Accumulation**: Unusually high volume on a narrow-range bar, closing up.
+*   **For Bearish Trades (Score < 0)**: The trade requires confirmation from either:
+    *   **Pivot Negative Volume (PNV)**: High down-volume that exceeds the highest up-volume of the last 10 bars.
+    *   **Distribution**: Unusually high volume on a narrow-range bar, closing down.
 
-1. **09:00**: Map instruments (ATM/OTM strikes) using `ExtractInstrumentKeys.py`.
-2. **09:15**: Observe Open vs. Hunter Zone + PCR; Set **Day Type**.
-3. **09:16 - 10:00**: Monitor for **Hunter Combinations** at boundaries.
-4. **All Day**: Calculate **Total Score (+/- 12)**. If sync occurs, calculate **Probability**.
-5. **Execution**: Plan SL/TP pre-emptively based on ATR; Send **GTT Order** (Entry + SL + TP) as a single packet.
-6. **Monitoring**: Exit on **4x RVOL Spike** or **Score Flip**.
+If the VPA signals do not align with the Microstructure Score, the trade is skipped, filtering out low-conviction setups.
+
+### **2.4 Tactical Templates & Risk Management**
+
+*   **Tactical Templates**: The system uses specific strategies based on the Day Type (e.g., `HunterTrade` for morning traps, `P2PTrend` for trending days).
+*   **Dynamic Stop-Loss**: Stop-losses are calculated dynamically based on a multiple of the **ATR (Average True Range)** and placed beyond a recent **structural swing point**. This is a more robust approach than using fixed-point stops.
+*   **Probability Weighting**: Before entry, every potential trade is assigned a probability score (0-100%) based on factors like PCR alignment and score force. Only trades with a score **> 75%** are considered.
