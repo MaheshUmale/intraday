@@ -10,7 +10,7 @@ class OrderManager:
         self.order_api = upstox_client.OrderApiV3(self.api_client)
         self.paper_portfolio = {}
 
-    def place_order(self, quantity, product, validity, price, instrument_token, order_type, transaction_type, disclosed_quantity=0, trigger_price=0.0, is_amo=False):
+    def place_order(self, quantity, product, validity, price, instrument_token, order_type, transaction_type, tag, disclosed_quantity=0, trigger_price=0.0, is_amo=False):
         """
         Places an order with the Upstox API V3.
         """
@@ -19,7 +19,7 @@ class OrderManager:
             product=product,
             validity=validity,
             price=price,
-            tag=instrument_token,
+            tag=tag,
             instrument_token=instrument_token,
             order_type=order_type,
             transaction_type=transaction_type,
@@ -50,6 +50,13 @@ class OrderManager:
         Returns the paper trading positions.
         """
         return self.paper_portfolio
+
+    def close_paper_position(self, instrument_token):
+        """
+        Closes a paper trading position.
+        """
+        if instrument_token in self.paper_portfolio:
+            del self.paper_portfolio[instrument_token]
 
     def modify_order(self, order_id, quantity, validity, price, order_type, trigger_price=0.0):
         """

@@ -5,11 +5,25 @@ import pandas as pd
 from trading_bot.authentication.auth import UpstoxAuthenticator
 from trading_bot.utils.data_handler import DataHandler
 from trading_bot.execution.execution import OrderManager
-from trading_bot.strategy.strategy import classify_day_type, calculate_microstructure_score, calculate_pcr, calculate_evwma, HunterTrade, P2PTrend, Scalp, MeanReversion, DayType
+from trading_bot.strategy.strategy import (
+    classify_day_type, calculate_microstructure_score, calculate_pcr,
+    calculate_evwma, HunterTrade, P2PTrend, Scalp, MeanReversion, DayType,
+    detect_pocket_pivot_volume, detect_pivot_negative_volume,
+    detect_accumulation, detect_distribution
+)
 import trading_bot.config as config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Create a dedicated logger for trades
+trade_logger = logging.getLogger('trade_logger')
+trade_logger.setLevel(logging.INFO)
+fh = logging.FileHandler('trades.log')
+fh.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(message)s')
+fh.setFormatter(formatter)
+trade_logger.addHandler(fh)
 
 class TradingBot:
     """
@@ -25,6 +39,64 @@ class TradingBot:
         self.hunter_zone = {}
         self.strategies = {}
         self.open_positions = {}
+        self.one_minute_candles = {}
+        self.last_known_volume = {}
+
+    def _on_message(self, message):
+        """
+        Callback function to handle incoming market data.
+        """
+        instrument_key = message['instrument_key']
+        price = message['last_price']
+        cumulative_volume = message.get('volume', 0)
+
+        # Live Stop-Loss Monitoring
+        if instrument_key in self.open_positions:
+            self.monitor_stop_loss(instrument_key, self.open_positions[instrument_key], price)
+
+        # Calculate volume change from cumulative volume
+        last_volume = self.last_known_volume.get(instrument_key, 0)
+        volume_change = cumulative_volume - last_volume
+        # Handle potential reset of cumulative volume at the start of a day or session
+        if volume_change < 0:
+            volume_change = cumulative_volume
+        self.last_known_volume[instrument_key] = cumulative_volume
+
+
+        # Candle Aggregation
+        now = datetime.now()
+        current_minute = now.replace(second=0, microsecond=0)
+
+        if instrument_key not in self.one_minute_candles:
+            self.one_minute_candles[instrument_key] = {
+                'timestamp': current_minute,
+                'open': price,
+                'high': price,
+                'low': price,
+                'close': price,
+                'volume': volume_change
+            }
+        else:
+            candle = self.one_minute_candles[instrument_key]
+            if current_minute > candle['timestamp']:
+                # New candle - process the completed one
+                self.execute_strategy(instrument_key, pd.DataFrame([candle]))
+
+                # Start a new candle
+                self.one_minute_candles[instrument_key] = {
+                    'timestamp': current_minute,
+                    'open': price,
+                    'high': price,
+                    'low': price,
+                    'close': price,
+                    'volume': volume_change
+                }
+            else:
+                # Update current candle
+                candle['high'] = max(candle['high'], price)
+                candle['low'] = min(candle['low'], price)
+                candle['close'] = price
+                candle['volume'] += volume_change
 
     def run(self):
         """
@@ -76,22 +148,23 @@ class TradingBot:
         The main trading loop.
         """
         logging.info("Entering main trading loop...")
-        first_run = True
+
         while True:
             now = datetime.now()
 
-            # Run only during market hours
             if self._is_market_hours(now):
-                if first_run:
+                if not self.data_handler.market_data_streamer:
                     if config.PAPER_TRADING:
                         self.open_positions = self.order_manager.get_paper_positions()
-                    first_run = False
-                self._execute_daily_tasks(now)
-            else:
-                first_run = True
 
-            # Wait for the next interval
-            time.sleep(60)
+                    instrument_keys = self.data_handler.getNiftyAndBNFnOKeys()
+                    self.data_handler.start_market_data_stream(instrument_keys, on_message=self._on_message)
+                    self.calculate_hunter_zone(now)
+            else:
+                if self.data_handler.market_data_streamer:
+                    self.data_handler.stop_market_data_stream()
+
+            time.sleep(1)
 
     def _is_market_hours(self, now):
         """
@@ -99,19 +172,28 @@ class TradingBot:
         """
         return dt_time(9, 15) <= now.time() <= dt_time(15, 30)
 
-    def _execute_daily_tasks(self, now):
+    def monitor_stop_loss(self, instrument_key, position, current_price):
         """
-        Executes the daily trading tasks.
+        Monitors the stop-loss for a given position.
         """
-        market_status = self.data_handler.get_market_status(config.EXCHANGE)
-        if market_status and market_status.status == "open":
-            # Calculate Hunter Zone once at the beginning of the day
-            if not self.hunter_zone:
-                self.calculate_hunter_zone(now)
+        stop_loss_price = position['stop_loss_price']
 
-            # Execute the strategy for each configured instrument
-            for instrument_key in config.INSTRUMENTS:
-                self.execute_strategy(instrument_key)
+        if (position['direction'] == 'BULL' and current_price <= stop_loss_price) or \
+           (position['direction'] == 'BEAR' and current_price >= stop_loss_price):
+            logging.info(f"Stop-loss triggered for {instrument_key} at {current_price}. Closing position.")
+            trade_logger.info(f"EXIT: Stop-loss, {instrument_key}, {position['transaction_type']}, {current_price}")
+            self.order_manager.place_order(
+                quantity=1,
+                product="I",
+                validity="DAY",
+                price=0,
+                instrument_token=position['instrument_key'],
+                order_type="MARKET",
+                transaction_type="SELL",
+                tag="stop_loss_exit"
+            )
+            self.order_manager.close_paper_position(position['instrument_key'])
+            del self.open_positions[instrument_key]
 
     def calculate_hunter_zone(self, current_datetime):
         """
@@ -119,30 +201,32 @@ class TradingBot:
         of the previous trading day.
         """
         logging.info("Calculating Hunter Zone...")
-        to_date = (current_datetime - timedelta(days=1)).strftime('%Y-%m-%d')
-        from_date = (current_datetime - timedelta(days=2)).strftime('%Y-%m-%d')
-
         for instrument_key in config.INSTRUMENTS:
-            try:
-                candles = self.data_handler.get_historical_candle_data(instrument_key, '1minute', to_date, from_date)
-                if candles:
-                    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+            for i in range(1, 10):
+                to_date = (current_datetime - timedelta(days=i)).strftime('%Y-%m-%d')
+                from_date = (current_datetime - timedelta(days=i+1)).strftime('%Y-%m-%d')
+                try:
+                    candles = self.data_handler.get_historical_candle_data(instrument_key, 'minute', '1', to_date, from_date)
+                    if candles:
+                        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+                        break
+                except Exception as e:
+                    logging.error(f"Failed to fetch historical data for hunter zone calculation: {e}", exc_info=True)
+            if 'df' in locals() and df is not None:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-                    # Filter for the last 60 minutes of the previous trading day
-                    last_day_data = df[df['timestamp'].dt.date == pd.to_datetime(to_date).date()]
-                    last_60_min_data = last_day_data[last_day_data['timestamp'].dt.time >= dt_time(14, 30)]
+                # Filter for the last 60 minutes of the previous trading day
+                last_day_data = df[df['timestamp'].dt.date == pd.to_datetime(to_date).date()]
+                last_60_min_data = last_day_data[last_day_data['timestamp'].dt.time >= dt_time(14, 30)]
 
-                    if not last_60_min_data.empty:
-                        self.hunter_zone[instrument_key] = {
-                            'high': last_60_min_data['high'].max(),
-                            'low': last_60_min_data['low'].min()
-                        }
-                        logging.info(f"Hunter Zone for {instrument_key}: {self.hunter_zone[instrument_key]}")
-            except Exception as e:
-                logging.error(f"Failed to calculate Hunter Zone for {instrument_key}: {e}", exc_info=True)
+                if not last_60_min_data.empty:
+                    self.hunter_zone[instrument_key] = {
+                        'high': last_60_min_data['high'].max(),
+                        'low': last_60_min_data['low'].min()
+                    }
+                    logging.info(f"Hunter Zone for {instrument_key}: {self.hunter_zone[instrument_key]}")
 
-    def execute_strategy(self, instrument_key):
+    def execute_strategy(self, instrument_key, df):
         """
         Executes the trading strategy for a given instrument.
         """
@@ -160,16 +244,6 @@ class TradingBot:
 
         hunter_zone = self.hunter_zone[instrument_key]
 
-        # 2. Get Candle Data
-        today = datetime.now().strftime('%Y-%m-%d')
-        candles = self.data_handler.get_historical_candle_data(instrument_key, '1minute', today, today)
-        if not candles:
-            logging.warning(f"Could not fetch candles for {instrument_key}. Skipping.")
-            return
-
-        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-
         opening_price = df['open'].iloc[0]
 
         # 3. Calculate PCR
@@ -184,8 +258,6 @@ class TradingBot:
         day_type = classify_day_type(opening_price, hunter_zone['high'], hunter_zone['low'], pcr)
 
         # 5. Calculate Microstructure Score
-        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
 
         # Calculate 1-minute EVWMA
         df_1m = calculate_evwma(df.copy(), length=20)
@@ -204,12 +276,35 @@ class TradingBot:
 
         logging.info(f"Instrument: {instrument_key}, Day Type: {day_type.value}, Score: {score}")
 
-        # 6. Execute Trade
+        # 6. VPA Signal Detection
+        if config.USE_ADVANCED_VOLUME_ANALYSIS:
+            ppv = detect_pocket_pivot_volume(df)
+            pnv = detect_pivot_negative_volume(df)
+            accumulation = detect_accumulation(df)
+            distribution = detect_distribution(df)
+
+            logging.info(f"VPA Signals for {instrument_key}: PPV={ppv}, PNV={pnv}, Accumulation={accumulation}, Distribution={distribution}")
+
+            # Filter trade signal with VPA
+            if (score > 0 and not (ppv or accumulation)) or \
+               (score < 0 and not (pnv or distribution)):
+                logging.info("VPA signals do not confirm the microstructure score. Skipping trade.")
+                return
+
+        # 7. Execute Trade
         strategy = self.strategies.get(day_type)
         if strategy:
+            vpa_signal = None
+            if config.USE_ADVANCED_VOLUME_ANALYSIS:
+                if ppv: vpa_signal = "PPV"
+                elif pnv: vpa_signal = "PNV"
+                elif accumulation: vpa_signal = "Accumulation"
+                elif distribution: vpa_signal = "Distribution"
+
             strategy.execute(
                 score=score,
                 price=price,
+                vpa_signal=vpa_signal,
                 instrument_key=instrument_key,
                 hunter_zone=hunter_zone,
                 pcr=pcr,
