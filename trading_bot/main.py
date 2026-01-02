@@ -301,6 +301,17 @@ class TradingBot:
             self.data_handler.stop_market_data_stream()
         logging.info("Trading bot has been shut down.")
 
+
+    def shutdown(self):
+        """
+        Gracefully shuts down the trading bot.
+        """
+        logging.info("Shutting down the trading bot...")
+        if self.data_handler:
+            self.data_handler.stop_market_data_stream()
+        logging.info("Trading bot has been shut down.")
+
+
 import time
 import signal
 import sys
@@ -311,16 +322,6 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
-
-
-    def shutdown(self):
-        """
-        Gracefully shuts down the trading bot.
-        """
-        logging.info("Shutting down the trading bot...")
-        if self.data_handler:
-            self.data_handler.stop_market_data_stream()
-        logging.info("Trading bot has been shut down.")
 
 
 if __name__ == "__main__":
