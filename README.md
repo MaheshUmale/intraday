@@ -11,7 +11,7 @@ This section provides a step-by-step guide to get the trading bot running on you
 ### **1.1 Prerequisites**
 *   Python 3.10 or higher.
 *   An active Upstox trading account.
-*   API credentials from the [Upstox Developer Console](https://upstox.com/developer/).
+*   An access token from the [Upstox Developer Console](https://upstox.com/developer/).
 
 ### **1.2 Installation**
 
@@ -36,37 +36,10 @@ Create a file named `.env` in the root of the project directory. This file will 
 Populate the `.env` file with the following content, replacing the placeholder values with your actual credentials from the Upstox Developer Console:
 
 ```plaintext
-UPSTOX_API_KEY="Your_Upstox_API_Key"
-UPSTOX_API_SECRET="Your_Upstox_API_Secret"
-UPSTOX_REDIRECT_URI="https//127.0.0.1:5000/auth/callback" # Or your configured redirect URI
-UPSTOX_ACCESS_TOKEN="" # Leave this empty initially
+UPSTOX_ACCESS_TOKEN="Your_Upstox_Access_Token"
 ```
 
-### **1.4 First-Time Authentication**
-
-The system uses OAuth2 for secure authentication. You only need to perform this authorization step once. The application will then store and manage the access token for you.
-
-1.  **Run the Main Application:**
-    ```bash
-    python -m trading_bot.main
-    ```
-
-2.  **Authorize in Browser:**
-    The first time you run the bot, it will detect that there is no access token. It will print a URL in your console.
-    *   Copy this URL.
-    *   Paste it into your web browser.
-    *   Log in with your Upstox credentials and grant the application access.
-
-3.  **Enter the Authorization Code:**
-    After granting access, you will be redirected to your `REDIRECT_URI`. The URL in your browser's address bar will now contain a parameter called `code`. It will look something like this:
-    `https://127.0.0.1:5000/auth/callback?code=**<long_authorization_code>**`
-
-    *   Copy the value of the `code` parameter.
-    *   Paste this code back into the terminal where the bot is prompting for it.
-
-The application will then automatically fetch the access token, save it to your `.env` file, and proceed with its normal operation. You will not have to do this again unless your token is revoked.
-
-### **1.5 Running the Bot and Tests**
+### **1.4 Running the Bot and Tests**
 
 *   **To Run the Trading Bot:**
     ```bash
@@ -78,7 +51,7 @@ The application will then automatically fetch the access token, save it to your 
     python -m unittest discover -s tests
     ```
 
-### **1.6 System Configuration (`trading_bot/config.py`)**
+### **1.5 System Configuration (`trading_bot/config.py`)**
 
 The `trading_bot/config.py` file allows you to control key system parameters without changing the code:
 

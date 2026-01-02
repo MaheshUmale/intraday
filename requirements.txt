@@ -1,4 +1,4 @@
-upstox-python-sdk
+upstox-python-sdk==2.19.0
 python-dotenv
 pandas
 pandas-ta

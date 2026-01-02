@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 from trading_bot.execution.execution import OrderManager
 import trading_bot.config as config
+import upstox_client
 
 class TestOrderManager(unittest.TestCase):
     def setUp(self):
@@ -19,7 +20,7 @@ class TestOrderManager(unittest.TestCase):
         self.assertIsNotNone(response.order_id)
         self.assertIn("TEST_TOKEN", self.order_manager.paper_positions)
 
-    @patch('upstox_client.OrderApi')
+    @patch('upstox_client.OrderApiV3')
     def test_place_order_live(self, mock_order_api):
         # Arrange
         config.PAPER_TRADING = False

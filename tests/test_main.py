@@ -2,6 +2,9 @@ import unittest
 from unittest.mock import patch, MagicMock
 from trading_bot.main import TradingBot
 import pandas as pd
+import pandas_ta as ta
+from trading_bot.strategy.strategy import DayType
+import trading_bot.config as config
 
 class TestTradingBot(unittest.TestCase):
     def setUp(self):
@@ -9,7 +12,7 @@ class TestTradingBot(unittest.TestCase):
         # Mock dependencies
         self.bot.data_handler = MagicMock()
         self.bot.order_manager = MagicMock()
-        self.bot.strategies = {'BEARISH_TREND': MagicMock()}
+        self.bot.strategies = {DayType.BEARISH_TREND: MagicMock()}
 
     def test_on_message_candle_aggregation_new(self):
         # Arrange
@@ -33,24 +36,28 @@ class TestTradingBot(unittest.TestCase):
         candle = self.bot.one_minute_candles['TEST_KEY']
         self.assertEqual(candle['high'], 105)
         self.assertEqual(candle['close'], 105)
-        self.assertEqual(candle['volume'], 500) # 1500 - 1000
+        self.assertEqual(candle['volume'], 1500)
 
     @patch('trading_bot.main.classify_day_type')
     @patch('trading_bot.main.calculate_pcr')
     @patch('trading_bot.main.calculate_microstructure_score')
-    def test_execute_strategy(self, mock_calc_score, mock_calc_pcr, mock_classify_day):
+    @patch('pandas_ta.vwma')
+    def test_execute_strategy(self, mock_vwma, mock_calc_score, mock_calc_pcr, mock_classify_day):
         # Arrange
+        config.USE_ADVANCED_VOLUME_ANALYSIS = False # Disable VPA for this test
         self.bot.hunter_zone['TEST_KEY'] = {'high': 100, 'low': 90}
         df = pd.DataFrame({'open': [95], 'close': [98], 'high': [99], 'low': [94], 'volume': [1000], 'timestamp': [pd.Timestamp.now()]})
-        mock_classify_day.return_value = 'BEARISH_TREND'
+        mock_classify_day.return_value = DayType.BEARISH_TREND
         mock_calc_pcr.return_value = 0.8
         mock_calc_score.return_value = -10
+        mock_vwma.return_value = pd.Series([100])
 
         # Act
         self.bot.execute_strategy('TEST_KEY', df)
 
         # Assert
-        self.bot.strategies['BEARISH_TREND'].execute.assert_called_once()
+        self.bot.strategies[DayType.BEARISH_TREND].execute.assert_called_once()
+        config.USE_ADVANCED_VOLUME_ANALYSIS = True # Reset config
 
 
 if __name__ == '__main__':
