@@ -39,7 +39,7 @@ class DataHandler:
         # For now, we'll subscribe to the main indices.
         return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"]
 
-    def get_historical_candle_data(self, instrument_key, interval, time_unit, to_date, from_date):
+    def get_historical_candle_data(self, instrument_key, interval, to_date, from_date):
         """
         Fetches historical candle data.
         """
