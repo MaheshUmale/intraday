@@ -64,6 +64,9 @@ class Backtester:
 
         tick_count = 0
         for tick in ticks_cursor:
+            # Extract the timestamp from the tick data
+            tick_timestamp = tick['timestamp']
+
             # Format the tick data into the structure expected by _on_message
             formatted_message = {
                 'feeds': {
@@ -80,8 +83,8 @@ class Backtester:
                 }
             }
 
-            # 4. Simulate the WebSocket message
-            self.trading_bot._on_message(formatted_message)
+            # 4. Simulate the WebSocket message, passing the historical timestamp
+            self.trading_bot._on_message(formatted_message, tick_timestamp)
             tick_count += 1
 
         print(f"Processed {tick_count} ticks.")

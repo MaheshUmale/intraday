@@ -94,7 +94,7 @@ class TestTradingBot(unittest.TestCase):
         mock_vwma.return_value = pd.Series([100])
 
         # Act
-        self.bot.execute_strategy('TEST_KEY', df)
+        self.bot.execute_strategy('TEST_KEY', df, pd.Timestamp.now())
 
         # Assert
         self.bot.strategies[DayType.BEARISH_TREND].execute.assert_called_once()
