@@ -25,6 +25,7 @@ class DataHandler:
         self.api_client = api_client
         self.market_data_streamer = None
         self.expiry_dates = {}
+        self.instrument_mapping = {}  # To store the full mapping
         self.instrument_keys = self.getNiftyAndBNFnOKeys(api_client)
 
 
@@ -156,13 +157,13 @@ class DataHandler:
                 "BANKNIFTY": nifty_bank_last_price
             }
 
-            data = self.get_upstox_instruments(["NIFTY", "BANKNIFTY"], current_spots)
+            self.instrument_mapping = self.get_upstox_instruments(["NIFTY", "BANKNIFTY"], current_spots)
             
-            self.expiry_dates['NIFTY'] = data['NIFTY']['expiry']
-            self.expiry_dates['BANKNIFTY'] = data['BANKNIFTY']['expiry']
+            self.expiry_dates['NIFTY'] = self.instrument_mapping['NIFTY']['expiry']
+            self.expiry_dates['BANKNIFTY'] = self.instrument_mapping['BANKNIFTY']['expiry']
 
-            ALL_FNO.extend(data['NIFTY']['all_keys'])
-            ALL_FNO.extend(data['BANKNIFTY']['all_keys'])
+            ALL_FNO.extend(self.instrument_mapping['NIFTY']['all_keys'])
+            ALL_FNO.extend(self.instrument_mapping['BANKNIFTY']['all_keys'])
 
             return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"] + ALL_FNO
         except ApiException as e:

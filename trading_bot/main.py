@@ -41,6 +41,7 @@ class TradingBot:
         self.strategies = {}
         self.open_positions = {}
         self.last_processed_timestamp = {}
+        self.latest_volume_cache = {}
 
 
     def run(self):
@@ -129,6 +130,9 @@ class TradingBot:
 
                 # Update the last processed timestamp
                 self.last_processed_timestamp[instrument_key] = candle_timestamp
+
+                # Update the volume cache
+                self.latest_volume_cache[instrument_key] = latest_candle.get('volume', 0)
 
                 # Convert to DataFrame for strategy execution
                 df = pd.DataFrame([latest_candle], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
@@ -241,6 +245,14 @@ class TradingBot:
             symbol = 'BANKNIFTY'
         elif 'NIFTY' in instrument_key or 'Nifty 50' in instrument_key:
             symbol = 'NIFTY'
+
+        # Volume substitution for spot indexes
+        if instrument_key in ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"] and df['volume'].iloc[0] == 0:
+            future_key = self.data_handler.instrument_mapping.get(symbol, {}).get('future')
+            if future_key and future_key in self.latest_volume_cache:
+                future_volume = self.latest_volume_cache[future_key]
+                df.loc[df.index[0], 'volume'] = future_volume
+                logging.info(f"Substituted volume for {instrument_key} with future volume ({future_volume}) from {future_key}")
 
         if not symbol or not self.data_handler.expiry_dates.get(symbol):
             logging.warning(f"Could not determine symbol or expiry for {instrument_key}. Skipping option chain.")
