@@ -48,19 +48,22 @@ class Backtester:
         all_candles = []
         for instrument_key in self.trading_bot.config.INSTRUMENTS:
             candles = self.trading_bot.data_handler.get_historical_candle_data(
-                instrument_key, '1', 'minute', to_date_str, from_date_str
+                instrument_key, '1', 'minutes', to_date_str, from_date_str
             )
             if candles:
                 all_candles.extend([(instrument_key, candle) for candle in candles])
 
+        for candle in candles[:3]:
+            print(candle)
+
         # Sort all candles by timestamp chronologically
-        all_candles.sort(key=lambda x: x[1]['timestamp'])
+        all_candles.sort(key=lambda x: x[0])
 
         print(f"Fetched {len(all_candles)} total candles for backtesting.")
 
         # 4. Iterate through each candle and execute the strategy
         for instrument_key, candle in all_candles:
-            candle_timestamp = datetime.fromisoformat(candle['timestamp'])
+            candle_timestamp = datetime.fromisoformat(candle[0])
 
             # Create a DataFrame for the single candle
             df = pd.DataFrame([candle], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])

@@ -146,10 +146,11 @@ class DataHandler:
         except ApiException as e:
             print("Exception when calling MarketQuoteV3Api->get_ltp: %s\n" % e)
 
-    def get_historical_candle_data(self, instrument_key, interval_unit, interval_value, to_date, from_date):
+    def get_historical_candle_data(self, instrument_key:str, interval_unit:str, interval_value:str, to_date:str, from_date:str):
         """
         Fetches historical candle data, choosing the correct API endpoint based on the instrument type.
         """
+        print(f"{instrument_key}, {interval_unit}, {interval_value}, {to_date}, {from_date}")
         try:
             history_api = upstox_client.HistoryV3Api(self.api_client)
 
@@ -163,13 +164,7 @@ class DataHandler:
                 )
                 logging.info(f"Fetched equity historical data for {instrument_key}")
             else:
-                api_response = history_api.get_historical_candle_data1(
-                    instrument_key=instrument_key,
-                    interval=interval_value,
-                    unit=interval_unit,
-                    to_date=to_date,
-                    from_date=from_date
-                )
+                api_response = history_api.get_historical_candle_data1(instrument_key, "minutes", "1", "2026-01-02", "2026-01-01" )
                 logging.info(f"Fetched F&O historical data for {instrument_key}")
 
             return api_response.data.candles
