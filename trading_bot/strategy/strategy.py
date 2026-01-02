@@ -353,10 +353,10 @@ def calculate_pcr(option_chain):
         return 1.0  # Neutral PCR if data is unavailable
 
     for strike_data in option_chain:
-        if strike_data.put_options:
-            total_put_oi += strike_data.put_options.open_interest or 0
-        if strike_data.call_options:
-            total_call_oi += strike_data.call_options.open_interest or 0
+        if strike_data.put_options and strike_data.put_options.market_data:
+            total_put_oi += strike_data.put_options.market_data.open_interest or 0
+        if strike_data.call_options and strike_data.call_options.market_data:
+            total_call_oi += strike_data.call_options.market_data.open_interest or 0
 
     if total_call_oi == 0:
         return 100.0  # Assign a high value if no calls, indicating extreme bullishness

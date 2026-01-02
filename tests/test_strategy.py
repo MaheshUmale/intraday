@@ -39,14 +39,14 @@ class TestStrategy(unittest.TestCase):
         self.assertGreater(stop_loss, 100)
 
     def test_calculate_pcr(self):
-        # Mocking the OptionStrikeData objects
+        # Mocking the OptionStrikeData objects with the correct nested structure
         mock_strike_1 = MagicMock()
-        mock_strike_1.put_options.open_interest = 100
-        mock_strike_1.call_options.open_interest = 50
+        mock_strike_1.put_options.market_data.open_interest = 100
+        mock_strike_1.call_options.market_data.open_interest = 50
 
         mock_strike_2 = MagicMock()
-        mock_strike_2.put_options.open_interest = 200
-        mock_strike_2.call_options.open_interest = 100
+        mock_strike_2.put_options.market_data.open_interest = 200
+        mock_strike_2.call_options.market_data.open_interest = 100
 
         option_chain = [mock_strike_1, mock_strike_2]
         pcr = calculate_pcr(option_chain)
