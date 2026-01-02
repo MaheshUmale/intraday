@@ -146,24 +146,35 @@ class DataHandler:
         except ApiException as e:
             print("Exception when calling MarketQuoteV3Api->get_ltp: %s\n" % e)
 
- 
     def get_historical_candle_data(self, instrument_key, interval_unit, interval_value, to_date, from_date):
         """
-        Fetches historical candle data.
+        Fetches historical candle data, choosing the correct API endpoint based on the instrument type.
         """
         try:
             history_api = upstox_client.HistoryV3Api(self.api_client)
-            api_response = history_api.get_historical_candle_data1(
-                instrument_key,
-                interval_unit,
-                interval_value,
-                to_date,
-                from_date
-            )
-            logging.info(f"Fetched historical data for {instrument_key}")
+
+            if instrument_key.startswith('NSE_EQ'):
+                # The equity history API does not support a 'from_date' range.
+                api_response = history_api.get_historical_candle_data(
+                    instrument_key=instrument_key,
+                    interval=interval_value,
+                    unit=interval_unit,
+                    to_date=to_date
+                )
+                logging.info(f"Fetched equity historical data for {instrument_key}")
+            else:
+                api_response = history_api.get_historical_candle_data1(
+                    instrument_key=instrument_key,
+                    interval=interval_value,
+                    unit=interval_unit,
+                    to_date=to_date,
+                    from_date=from_date
+                )
+                logging.info(f"Fetched F&O historical data for {instrument_key}")
+
             return api_response.data.candles
         except ApiException as e:
-            logging.error(f"Exception when calling HistoryV3Api->get_historical_candle_data1: {e}")
+            logging.error(f"Exception when calling HistoryV3Api for {instrument_key}: {e}")
             return None
 
     def get_intra_day_candle_data(self, instrument_key, interval_unit, interval_value):
