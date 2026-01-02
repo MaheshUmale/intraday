@@ -5,6 +5,12 @@ from datetime import datetime
 import json
 import os
 
+from upstox_client import MarketDataStreamerV3, ApiClient, Configuration
+
+
+UPSTOX_ACCESS_TOKEN="eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI3NkFGMzUiLCJqdGkiOiI2OTU3NGM2MmUzNjIzMDVmYzZkMmE5ZTgiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2NzMyODg2NiwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzY3MzkxMjAwfQ.TD7aGxpWsI6gcJ-40gOdMd72jpPCwk1QX3sxgBgBX08" # Leave this empty initially
+
+
 class DataHandler:
     """
     Handles data fetching from the Upstox API.
@@ -107,6 +113,13 @@ class DataHandler:
             logging.error(f"Exception when calling MarketQuoteApi->get_market_quote_ohlc for option chain: {e}")
             return []
 
+
+    
+    def on_auto_reconnect_stopped(data):
+        """Handler for when auto-reconnect retries are exhausted."""
+        print(f" {datetime.now()} == Auto-reconnect stopped after retries: {data}")
+        # Consider manual intervention or a higher-level retry here
+
     def start_market_data_stream(self, instrument_keys, on_message, on_open=None, on_close=None, on_error=None):
         """
         Starts the market data WebSocket stream.
@@ -116,17 +129,37 @@ class DataHandler:
             return
 
         try:
-            market_streamer_api = upstox_client.WebsocketApi(self.api_client)
-            self.market_data_streamer = market_streamer_api.get_market_data_feed(
-                self.api_version,
-                "full", # "ltpc" for lite, "full" for full data
-                ",".join(instrument_keys)
-            )
+            
+            # 1. Configure
+            configuration = upstox_client.Configuration()
+            configuration.access_token = UPSTOX_ACCESS_TOKEN
+            
+            # 2. Initialize Streamer
+            # Note: The SDK manages the connection, auth, and auto-reconnects.
+        
+            print("DEBUG: Initializing ApiClient...", flush=True)
+            api_client = upstox_client.ApiClient(configuration)
+            print("DEBUG: ApiClient Initialized. Initializing Streamer...", flush=True)
+            self.market_data_streamer =  MarketDataStreamerV3(api_client, list(instrument_keys), "full")
+ 
+            print("DEBUG: Streamer Initialized.", flush=True)
+            
+            # 3. Register Callbacks
+            self.market_data_streamer.on("message", on_message)
+            self.market_data_streamer.on("open", on_open)
+            self.market_data_streamer.on("error", on_error)
+            self.market_data_streamer.on("close", on_close)
+            
+            self.market_data_streamer.on("autoReconnectStopped", self.on_auto_reconnect_stopped)
+            
+            # --- Configure Auto-Reconnect ---
+            # Enable auto-reconnect, set interval to 15 seconds, and max retries to 5
+            ENABLE_AUTO_RECONNECT = True
+            INTERVAL_SECONDS = 5
+            MAX_RETRIES = 5
 
-            self.market_data_streamer.on_message = on_message
-            if on_open: self.market_data_streamer.on_open = on_open
-            if on_close: self.market_data_streamer.on_close = on_close
-            if on_error: self.market_data_streamer.on_error = on_error
+            self.market_data_streamer.auto_reconnect(ENABLE_AUTO_RECONNECT, INTERVAL_SECONDS, MAX_RETRIES)
+
 
             self.market_data_streamer.connect()
             logging.info("Market data stream started.")

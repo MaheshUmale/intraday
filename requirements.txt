@@ -1,4 +1,4 @@
-upstox-client
+upstox-python-sdk
 python-dotenv
 pandas
 pandas-ta
