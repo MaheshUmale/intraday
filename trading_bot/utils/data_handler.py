@@ -30,11 +30,32 @@ class DataHandler:
 
         
     def get_upstox_instruments(self, symbols=["NIFTY", "BANKNIFTY"], spot_prices={"NIFTY": 0, "BANKNIFTY": 0}):
-        # 1. Download and Load Instrument Master (NSE_FO for Futures and Options)
-        url = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
-        response = requests.get(url)
-        with gzip.GzipFile(fileobj=io.BytesIO(response.content)) as f:
-            df = pd.read_json(f)
+        instrument_file = 'nse_instruments.json'
+
+        # 1. Load Instrument Master (from local cache or download with cache invalidation)
+
+        should_download = True
+        if os.path.exists(instrument_file):
+            # Check if the file is more than 24 hours old
+            file_mod_time = os.path.getmtime(instrument_file)
+            if (time.time() - file_mod_time) / 3600 < 24:
+                print("Loading instruments from local cache (less than 24 hours old)...")
+                df = pd.read_json(instrument_file)
+                should_download = False
+            else:
+                print("Instrument cache is older than 24 hours. Re-downloading...")
+
+        if should_download:
+            print("Downloading instrument master...")
+            # Download and Load Instrument Master (NSE_FO for Futures and Options)
+            url = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+            response = requests.get(url)
+            with gzip.GzipFile(fileobj=io.BytesIO(response.content)) as f:
+                df = pd.read_json(f)
+
+            # Save to local cache for future use
+            df.to_json(instrument_file)
+            print(f"Saved instrument master to {instrument_file}")
 
         full_mapping = {}
 
