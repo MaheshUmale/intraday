@@ -69,13 +69,14 @@ class TradingBot:
             return
 
         for instrument_key, feed in data.get('feeds', {}).items():
-            if 'marketFF' in feed.get('ff', {}):
-                ltpc_data = feed['ff']['marketFF'].get('ltpc')
+            # logging.info(f"{instrument_key}")
+            if 'marketFF' in feed.get('fullFeed', {}):
+                ltpc_data = feed['fullFeed']['marketFF'].get('ltpc')
                 if ltpc_data:
                     price = ltpc_data.get('ltp')
                     volume_change = ltpc_data.get('ltq')
 
-                    logging.info(f"Received data for {instrument_key}: Price={price}, Volume Change={volume_change}")
+                    # logging.info(f"Received data for {instrument_key}: Price={price}, Volume Change={volume_change}")
 
                     # Live Stop-Loss Monitoring
                     if instrument_key in self.open_positions:
@@ -156,19 +157,36 @@ class TradingBot:
         The main trading loop.
         """
         logging.info("Entering main trading loop...")
-        while True:
-            now = datetime.now()
-            if self._is_market_hours(now):
-                if not self.data_handler.market_data_streamer:
-                    if config.PAPER_TRADING:
-                        self.open_positions = self.order_manager.get_paper_positions()
-                    instrument_keys = self.data_handler.getNiftyAndBNFnOKeys()
-                    self.data_handler.start_market_data_stream(instrument_keys, on_message=self._on_message)
-                    self.calculate_hunter_zone(now)
-            else:
-                if self.data_handler.market_data_streamer:
-                    self.data_handler.stop_market_data_stream()
-            time.sleep(1)
+        condition = True
+        try: 
+            while condition:
+                now = datetime.now()
+                if self._is_market_hours(now):
+                    if not self.data_handler.market_data_streamer:
+                        if config.PAPER_TRADING:
+                            self.open_positions = self.order_manager.get_paper_positions()
+                        instrument_keys = self.data_handler.getNiftyAndBNFnOKeys(self.api_client)
+                        self.data_handler.start_market_data_stream(instrument_keys, on_message=self._on_message)
+                        self.calculate_hunter_zone(now)
+                else:
+                    if self.data_handler.market_data_streamer:
+                        self.data_handler.stop_market_data_stream()
+                
+                 # CRITICAL: This sleep allows Python to handle OS signals (like Ctrl+C)
+                try:
+                    time.sleep(100) 
+                except KeyboardInterrupt:
+                    # Catch the interrupt here to allow a graceful exit from the loop
+                    print("Caught KeyboardInterrupt within loop, exiting.")
+                    condition =False
+                    sys.exit(1)
+                    break
+                
+        except KeyboardInterrupt:
+            # Catch the interrupt here to allow a graceful exit from the loop
+            print("Caught KeyboardInterrupt within loop, exiting.")
+            
+
 
     def _is_market_hours(self, now):
         """
@@ -203,7 +221,7 @@ class TradingBot:
                 to_date = (current_datetime - timedelta(days=i)).strftime('%Y-%m-%d')
                 from_date = (current_datetime - timedelta(days=i+1)).strftime('%Y-%m-%d')
                 try:
-                    candles = self.data_handler.get_historical_candle_data(instrument_key, 'minute', '1', to_date, from_date)
+                    candles = self.data_handler.get_historical_candle_data(instrument_key, 'minutes', '1', to_date, from_date)
                     if candles:
                         df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
                         break
@@ -273,7 +291,31 @@ class TradingBot:
                 day_type=day_type, option_chain=option_chain, open_positions=self.open_positions,
                 evwma_1m=evwma_1m, evwma_5m=evwma_5m, df=df
             )
+    
+    def shutdown(self):
+        """
+        Gracefully shuts down the trading bot.
+        """
+        logging.info("Shutting down the trading bot...")
+        if self.data_handler:
+            self.data_handler.stop_market_data_stream()
+        logging.info("Trading bot has been shut down.")
+
+import time
+import signal
+import sys
+
+# Define a clean exit handler (optional but good practice)
+def signal_handler(sig, frame):
+    print('\nCtrl+C received! Shutting down gracefully...')
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+
 
 if __name__ == "__main__":
     bot = TradingBot()
-    bot.run()
+    try:
+        bot.run()
+    except KeyboardInterrupt:
+        bot.shutdown()
