@@ -10,6 +10,7 @@ class TestTradingBot(unittest.TestCase):
         self.bot = TradingBot()
         # Mock dependencies
         self.bot.data_handler = MagicMock()
+        self.bot.data_handler.expiry_dates = {}
         self.bot.order_manager = MagicMock()
         self.bot.strategies = {DayType.BEARISH_TREND: MagicMock()}
 
@@ -19,8 +20,10 @@ class TestTradingBot(unittest.TestCase):
     @patch('pandas_ta.vwma')
     def test_execute_strategy(self, mock_vwma, mock_calc_score, mock_calc_pcr, mock_classify_day):
         # Arrange
+        instrument_key = 'NIFTY_TEST_KEY'
+        self.bot.data_handler.expiry_dates['NIFTY'] = '2024-01-01'
         config.USE_ADVANCED_VOLUME_ANALYSIS = False
-        self.bot.hunter_zone['TEST_KEY'] = {'high': 100, 'low': 90}
+        self.bot.hunter_zone[instrument_key] = {'high': 100, 'low': 90}
         df = pd.DataFrame({'open': [95], 'close': [98], 'high': [99], 'low': [94], 'volume': [1000], 'timestamp': [pd.Timestamp.now()]})
         mock_classify_day.return_value = DayType.BEARISH_TREND
         mock_calc_pcr.return_value = 0.8
@@ -28,7 +31,7 @@ class TestTradingBot(unittest.TestCase):
         mock_vwma.return_value = pd.Series([100])
 
         # Act
-        self.bot.execute_strategy('TEST_KEY', df, pd.Timestamp.now())
+        self.bot.execute_strategy(instrument_key, df, pd.Timestamp.now())
 
         # Assert
         self.bot.strategies[DayType.BEARISH_TREND].execute.assert_called_once()

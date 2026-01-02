@@ -24,6 +24,7 @@ class DataHandler:
         """
         self.api_client = api_client
         self.market_data_streamer = None
+        self.expiry_dates = {}
         self.instrument_keys = self.getNiftyAndBNFnOKeys(api_client)
 
 
@@ -135,16 +136,17 @@ class DataHandler:
             }
 
             data = self.get_upstox_instruments(["NIFTY", "BANKNIFTY"], current_spots)
-            # print(data)
-            # Accessing NIFTY keys
-            # print(f"NIFTY Fut: {data['NIFTY']['future']}")
-            # print(f"Total NIFTY keys to subscribe: {len(data['NIFTY']['all_keys'])}")
             
-            ALL_FNO = ALL_FNO+data['NIFTY']['all_keys']+data['BANKNIFTY']['all_keys']
-            print(ALL_FNO)
-            return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"]+ALL_FNO
+            self.expiry_dates['NIFTY'] = data['NIFTY']['expiry']
+            self.expiry_dates['BANKNIFTY'] = data['BANKNIFTY']['expiry']
+
+            ALL_FNO.extend(data['NIFTY']['all_keys'])
+            ALL_FNO.extend(data['BANKNIFTY']['all_keys'])
+
+            return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"] + ALL_FNO
         except ApiException as e:
-            print("Exception when calling MarketQuoteV3Api->get_ltp: %s\n" % e)
+            logging.error(f"Exception when calling MarketQuoteV3Api->get_ltp: {e}")
+            return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"]
 
     def get_historical_candle_data(self, instrument_key:str, interval_unit:str, interval_value:str, to_date:str, from_date:str):
         """
