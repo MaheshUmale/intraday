@@ -206,7 +206,7 @@ class TradingBot:
                 to_date = (current_datetime - timedelta(days=i)).strftime('%Y-%m-%d')
                 from_date = (current_datetime - timedelta(days=i+1)).strftime('%Y-%m-%d')
                 try:
-                    candles = self.data_handler.get_historical_candle_data(instrument_key, '1minute', to_date, from_date)
+                    candles = self.data_handler.get_historical_candle_data(instrument_key, 'minute', '1', to_date, from_date)
                     if candles:
                         df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
                         break

@@ -39,22 +39,23 @@ class DataHandler:
         # For now, we'll subscribe to the main indices.
         return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"]
 
-    def get_historical_candle_data(self, instrument_key, interval, to_date, from_date):
+    def get_historical_candle_data(self, instrument_key, interval_unit, interval_value, to_date, from_date):
         """
         Fetches historical candle data.
         """
         try:
             history_api = upstox_client.HistoryV3Api(self.api_client)
-            api_response = history_api.get_historical_candle_data(
+            api_response = history_api.get_historical_candle_data1(
                 instrument_key,
-                interval,
+                interval_unit,
+                interval_value,
                 to_date,
                 from_date
             )
             logging.info(f"Fetched historical data for {instrument_key}")
             return api_response.data.candles
         except ApiException as e:
-            logging.error(f"Exception when calling HistoryV3Api->get_historical_candle_data: {e}")
+            logging.error(f"Exception when calling HistoryV3Api->get_historical_candle_data1: {e}")
             return None
 
     def get_intra_day_candle_data(self, instrument_key, interval):
