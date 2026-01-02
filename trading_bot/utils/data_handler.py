@@ -215,9 +215,9 @@ class DataHandler:
             
             # Register Callbacks
             self.market_data_streamer.on("message", on_message)
-            self.market_data_streamer.on("open", on_open if on_open else lambda: None)
-            self.market_data_streamer.on("error", on_error if on_error else lambda err: None)
-            self.market_data_streamer.on("close", on_close if on_close else lambda: None)
+            self.market_data_streamer.on("open", on_open if on_open else lambda *args, **kwargs: None)
+            self.market_data_streamer.on("error", on_error if on_error else lambda *args, **kwargs: None)
+            self.market_data_streamer.on("close", on_close if on_close else lambda *args, **kwargs: None)
             
             self.market_data_streamer.on("autoReconnectStopped", self.on_auto_reconnect_stopped)
             

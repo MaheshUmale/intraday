@@ -70,7 +70,7 @@ class TradingBot:
 
         for instrument_key, feed in data.get('feeds', {}).items():
             # logging.info(f"{instrument_key}")
-            if 'marketFF' in feed.get('fullFeed', {}):
+            if 'fullFeed' in feed and 'marketFF' in feed.get('fullFeed', {}):
                 ltpc_data = feed['fullFeed']['marketFF'].get('ltpc')
                 if ltpc_data:
                     price = ltpc_data.get('ltp')
@@ -166,6 +166,9 @@ class TradingBot:
                         if config.PAPER_TRADING:
                             self.open_positions = self.order_manager.get_paper_positions()
                         instrument_keys = self.data_handler.getNiftyAndBNFnOKeys(self.api_client)
+                        # Dynamically update config.INSTRUMENTS with the fetched keys
+                        config.INSTRUMENTS.clear()
+                        config.INSTRUMENTS.extend(instrument_keys)
                         self.data_handler.start_market_data_stream(instrument_keys, on_message=self._on_message)
                         self.calculate_hunter_zone(now)
                 else:
@@ -213,35 +216,59 @@ class TradingBot:
 
     def calculate_hunter_zone(self, current_datetime):
         """
-        Calculates the Hunter Zone for each instrument.
+        Calculates the Hunter Zone for each instrument by fetching the last 10 days
+        of data and identifying the most recent trading day.
         """
         logging.info("Calculating Hunter Zone...")
+        to_date = current_datetime.strftime('%Y-%m-%d')
+        from_date = (current_datetime - timedelta(days=10)).strftime('%Y-%m-%d')
+
         for instrument_key in config.INSTRUMENTS:
-            for i in range(1, 10):
-                to_date = (current_datetime - timedelta(days=i)).strftime('%Y-%m-%d')
-                from_date = (current_datetime - timedelta(days=i+1)).strftime('%Y-%m-%d')
-                try:
-                    candles = self.data_handler.get_historical_candle_data(instrument_key, 'minutes', '1', to_date, from_date)
-                    if candles:
-                        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
-                        break
-                except Exception as e:
-                    logging.error(f"Failed to fetch historical data: {e}", exc_info=True)
-            if 'df' in locals() and df is not None:
+            try:
+                # Fetch data for the last 10 days to ensure we get the last trading day
+                candles = self.data_handler.get_historical_candle_data(
+                    instrument_key, 'minutes', '1', to_date, from_date
+                )
+
+                if not candles:
+                    logging.warning(f"No historical data found for {instrument_key} in the last 10 days.")
+                    continue
+
+                # Create DataFrame and process timestamps
+                df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
-                last_day_data = df[df['timestamp'].dt.date == pd.to_datetime(to_date).date()]
+
+                # Find the most recent trading day from the data
+                last_trading_day = df['timestamp'].dt.date.max()
+                if pd.isna(last_trading_day):
+                    logging.warning(f"Could not determine the last trading day for {instrument_key}.")
+                    continue
+
+                # Filter data for the last trading day
+                last_day_data = df[df['timestamp'].dt.date == last_trading_day]
+
+                # Filter for the last 60 minutes of that day (14:30 onwards)
                 last_60_min_data = last_day_data[last_day_data['timestamp'].dt.time >= dt_time(14, 30)]
+
                 if not last_60_min_data.empty:
                     self.hunter_zone[instrument_key] = {
                         'high': last_60_min_data['high'].max(),
                         'low': last_60_min_data['low'].min()
                     }
-                    logging.info(f"Hunter Zone for {instrument_key}: {self.hunter_zone[instrument_key]}")
+                    logging.info(f"Hunter Zone for {instrument_key} on {last_trading_day}: {self.hunter_zone[instrument_key]}")
+                else:
+                    logging.warning(f"No data found in the last 60 minutes for {instrument_key} on {last_trading_day}.")
+
+            except Exception as e:
+                logging.error(f"Failed to calculate Hunter Zone for {instrument_key}: {e}", exc_info=True)
 
     def execute_strategy(self, instrument_key, df):
         """
         Executes the trading strategy for a given instrument.
         """
+        if df.empty:
+            return
+
         logging.info(f"Executing strategy for {instrument_key}...")
         if instrument_key in self.open_positions:
             logging.info(f"Position already open for {instrument_key}. Skipping.")

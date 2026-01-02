@@ -18,7 +18,7 @@ class TestTradingBot(unittest.TestCase):
         message = {
             'feeds': {
                 'TEST_KEY': {
-                    'ff': {
+                    'fullFeed': {
                         'marketFF': {
                             'ltpc': {
                                 'ltp': 100,
@@ -43,7 +43,7 @@ class TestTradingBot(unittest.TestCase):
         initial_message = {
             'feeds': {
                 'TEST_KEY': {
-                    'ff': {
+                    'fullFeed': {
                         'marketFF': {
                             'ltpc': {
                                 'ltp': 100,
@@ -57,7 +57,7 @@ class TestTradingBot(unittest.TestCase):
         update_message = {
             'feeds': {
                 'TEST_KEY': {
-                    'ff': {
+                    'fullFeed': {
                         'marketFF': {
                             'ltpc': {
                                 'ltp': 105,
