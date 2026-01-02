@@ -234,10 +234,28 @@ class TradingBot:
             return
         hunter_zone = self.hunter_zone[instrument_key]
         opening_price = df['open'].iloc[0]
-        option_chain = self.data_handler.get_option_chain(instrument_key, datetime.now().strftime('%Y-%m-%d'))
-        if not option_chain:
-            logging.warning(f"Could not fetch option chain for {instrument_key}. Skipping.")
+
+        symbol = None
+        # Prioritize BANKNIFTY check as it also contains NIFTY
+        if 'BANKNIFTY' in instrument_key or 'Nifty Bank' in instrument_key:
+            symbol = 'BANKNIFTY'
+        elif 'NIFTY' in instrument_key or 'Nifty 50' in instrument_key:
+            symbol = 'NIFTY'
+
+        if not symbol or not self.data_handler.expiry_dates.get(symbol):
+            logging.warning(f"Could not determine symbol or expiry for {instrument_key}. Skipping option chain.")
             return
+
+        expiry_date = self.data_handler.expiry_dates[symbol]
+
+        # Determine the correct underlying instrument key for the option chain API call
+        underlying_instrument = "NSE_INDEX|Nifty 50" if symbol == 'NIFTY' else "NSE_INDEX|Nifty Bank"
+
+        option_chain = self.data_handler.get_option_chain(underlying_instrument, expiry_date)
+        if not option_chain:
+            logging.warning(f"Could not fetch option chain for {underlying_instrument} with expiry {expiry_date}. Skipping.")
+            return
+
         pcr = calculate_pcr(option_chain)
         day_type = classify_day_type(opening_price, hunter_zone['high'], hunter_zone['low'], pcr)
         df_1m = calculate_evwma(df.copy(), length=20)
