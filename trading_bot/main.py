@@ -313,6 +313,16 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 
+    def shutdown(self):
+        """
+        Gracefully shuts down the trading bot.
+        """
+        logging.info("Shutting down the trading bot...")
+        if self.data_handler:
+            self.data_handler.stop_market_data_stream()
+        logging.info("Trading bot has been shut down.")
+
+
 if __name__ == "__main__":
     bot = TradingBot()
     try:
