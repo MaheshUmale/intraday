@@ -7,10 +7,6 @@ import os
 
 from upstox_client import MarketDataStreamerV3, ApiClient, Configuration
 
-
-UPSTOX_ACCESS_TOKEN="eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI3NkFGMzUiLCJqdGkiOiI2OTU3NGM2MmUzNjIzMDVmYzZkMmE5ZTgiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2NzMyODg2NiwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzY3MzkxMjAwfQ.TD7aGxpWsI6gcJ-40gOdMd72jpPCwk1QX3sxgBgBX08" # Leave this empty initially
-
-
 class DataHandler:
     """
     Handles data fetching from the Upstox API.
@@ -20,7 +16,6 @@ class DataHandler:
         Initializes the DataHandler.
         """
         self.api_client = api_client
-        self.api_version = "v2"
         self.market_data_streamer = None
         self.instrument_keys = self._load_instrument_keys()
 
@@ -44,24 +39,22 @@ class DataHandler:
         # For now, we'll subscribe to the main indices.
         return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"]
 
-
     def get_historical_candle_data(self, instrument_key, interval, time_unit, to_date, from_date):
         """
         Fetches historical candle data.
         """
         try:
-            history_api = upstox_client.HistoryApi(self.api_client)
+            history_api = upstox_client.HistoryV3Api(self.api_client)
             api_response = history_api.get_historical_candle_data(
                 instrument_key,
                 interval,
                 to_date,
-                from_date,
-                self.api_version
+                from_date
             )
             logging.info(f"Fetched historical data for {instrument_key}")
             return api_response.data.candles
         except ApiException as e:
-            logging.error(f"Exception when calling HistoryApi->get_historical_candle_data: {e}")
+            logging.error(f"Exception when calling HistoryV3Api->get_historical_candle_data: {e}")
             return None
 
     def get_intra_day_candle_data(self, instrument_key, interval):
@@ -69,16 +62,15 @@ class DataHandler:
         Fetches intraday candle data.
         """
         try:
-            history_api = upstox_client.HistoryApi(self.api_client)
+            history_api = upstox_client.HistoryV3Api(self.api_client)
             api_response = history_api.get_intra_day_candle_data(
                 instrument_key,
-                interval,
-                self.api_version
+                interval
             )
             logging.info(f"Fetched intraday data for {instrument_key}")
             return api_response.data.candles
         except ApiException as e:
-            logging.error(f"Exception when calling HistoryApi->get_intra_day_candle_data: {e}")
+            logging.error(f"Exception when calling HistoryV3Api->get_intra_day_candle_data: {e}")
             return None
 
     def get_option_chain(self, instrument_key, expiry_date):
@@ -86,36 +78,14 @@ class DataHandler:
         Fetches the option chain for a given instrument and expiry date.
         """
         try:
-            market_quote_api = upstox_client.MarketQuoteApi(self.api_client)
-            api_response = market_quote_api.get_market_quote_ohlc(
-                self.api_version,
-                instrument_key,
-                "1d" # Interval doesn't matter much for option chain
-            )
-
-            # This is a simplified representation. The actual API might require more complex parsing.
-            # The SDK does not have a direct option chain method, so this is a workaround.
-            # In a real system, you would parse the full market data to build the chain.
-            if api_response and api_response.data:
-                # Placeholder logic to simulate an option chain
-                atm_strike = int(round(api_response.data.ohlc.close / 50) * 50)
-                option_chain = []
-                for i in range(-5, 6):
-                    strike = atm_strike + i * 50
-                    option_chain.append({
-                        "strike_price": strike,
-                        "call_options": {"instrument_key": f"NSE_FO|NIFTY{expiry_date.replace('-', '')}{strike}CE"},
-                        "put_options": {"instrument_key": f"NSE_FO|NIFTY{expiry_date.replace('-', '')}{strike}PE"}
-                    })
-                return option_chain
-            return []
+            options_api = upstox_client.OptionsApi(self.api_client)
+            api_response = options_api.get_pc_option_chain(instrument_key, expiry_date)
+            return api_response.data
         except ApiException as e:
-            logging.error(f"Exception when calling MarketQuoteApi->get_market_quote_ohlc for option chain: {e}")
+            logging.error(f"Exception when calling OptionsApi->get_pc_option_chain: {e}")
             return []
 
-
-    
-    def on_auto_reconnect_stopped(data):
+    def on_auto_reconnect_stopped(self, data):
         """Handler for when auto-reconnect retries are exhausted."""
         print(f" {datetime.now()} == Auto-reconnect stopped after retries: {data}")
         # Consider manual intervention or a higher-level retry here
@@ -129,22 +99,12 @@ class DataHandler:
             return
 
         try:
-            
-            # 1. Configure
-            configuration = upstox_client.Configuration()
-            configuration.access_token = UPSTOX_ACCESS_TOKEN
-            
-            # 2. Initialize Streamer
-            # Note: The SDK manages the connection, auth, and auto-reconnects.
-        
-            print("DEBUG: Initializing ApiClient...", flush=True)
-            api_client = upstox_client.ApiClient(configuration)
-            print("DEBUG: ApiClient Initialized. Initializing Streamer...", flush=True)
-            self.market_data_streamer =  MarketDataStreamerV3(api_client, list(instrument_keys), "full")
+            print("DEBUG: Initializing Streamer...", flush=True)
+            self.market_data_streamer =  MarketDataStreamerV3(self.api_client, list(instrument_keys), "full")
  
             print("DEBUG: Streamer Initialized.", flush=True)
             
-            # 3. Register Callbacks
+            # Register Callbacks
             self.market_data_streamer.on("message", on_message)
             self.market_data_streamer.on("open", on_open)
             self.market_data_streamer.on("error", on_error)
@@ -152,14 +112,12 @@ class DataHandler:
             
             self.market_data_streamer.on("autoReconnectStopped", self.on_auto_reconnect_stopped)
             
-            # --- Configure Auto-Reconnect ---
-            # Enable auto-reconnect, set interval to 15 seconds, and max retries to 5
+            # Configure Auto-Reconnect
             ENABLE_AUTO_RECONNECT = True
             INTERVAL_SECONDS = 5
             MAX_RETRIES = 5
 
             self.market_data_streamer.auto_reconnect(ENABLE_AUTO_RECONNECT, INTERVAL_SECONDS, MAX_RETRIES)
-
 
             self.market_data_streamer.connect()
             logging.info("Market data stream started.")

@@ -13,7 +13,6 @@ class OrderManager:
         Initializes the OrderManager.
         """
         self.api_client = api_client
-        self.api_version = "v2"
         self.paper_positions = {}
 
     def place_order(self, quantity, product, validity, price, instrument_token, order_type, transaction_type, tag=None):
@@ -38,27 +37,25 @@ class OrderManager:
             return MockOrderResponse()
 
         try:
-            order_api = upstox_client.OrderApi(self.api_client)
-            order_response = order_api.place_order(
-                self.api_version,
-                upstox_client.PlaceOrderRequest(
-                    quantity=quantity,
-                    product=product,
-                    validity=validity,
-                    price=price,
-                    instrument_token=instrument_token,
-                    order_type=order_type,
-                    transaction_type=transaction_type,
-                    disclosed_quantity=0,
-                    trigger_price=0,
-                    is_amo=False,
-                    tag=tag
-                )
+            order_api = upstox_client.OrderApiV3(self.api_client)
+            body = upstox_client.PlaceOrderV3Request(
+                quantity=quantity,
+                product=product,
+                validity=validity,
+                price=price,
+                instrument_token=instrument_token,
+                order_type=order_type,
+                transaction_type=transaction_type,
+                disclosed_quantity=0,
+                trigger_price=0.0,
+                is_amo=False,
+                tag=tag
             )
+            order_response = order_api.place_order(body=body)
             logging.info(f"Order placed successfully: {order_response}")
             return order_response
         except ApiException as e:
-            logging.error(f"Exception when calling OrderApi->place_order: {e}")
+            logging.error(f"Exception when calling OrderApiV3->place_order: {e}")
             return None
 
     def modify_order(self, order_id, quantity, validity, price, order_type, trigger_price=0):
@@ -70,22 +67,20 @@ class OrderManager:
             return True
 
         try:
-            order_api = upstox_client.OrderApi(self.api_client)
-            order_response = order_api.modify_order(
-                self.api_version,
-                upstox_client.ModifyOrderRequest(
-                    quantity=quantity,
-                    validity=validity,
-                    price=price,
-                    order_id=order_id,
-                    order_type=order_type,
-                    trigger_price=trigger_price
-                )
+            order_api = upstox_client.OrderApiV3(self.api_client)
+            body = upstox_client.ModifyOrderV3Request(
+                quantity=quantity,
+                validity=validity,
+                price=price,
+                order_id=order_id,
+                order_type=order_type,
+                trigger_price=trigger_price
             )
+            order_response = order_api.modify_order(body=body)
             logging.info(f"Order modified successfully: {order_response}")
             return order_response
         except ApiException as e:
-            logging.error(f"Exception when calling OrderApi->modify_order: {e}")
+            logging.error(f"Exception when calling OrderApiV3->modify_order: {e}")
             return None
 
     def cancel_order(self, order_id):
@@ -97,29 +92,47 @@ class OrderManager:
             return True
 
         try:
-            order_api = upstox_client.OrderApi(self.api_client)
-            order_response = order_api.cancel_order(self.api_version, order_id)
+            order_api = upstox_client.OrderApiV3(self.api_client)
+            order_response = order_api.cancel_order(order_id=order_id)
             logging.info(f"Order cancelled successfully: {order_response}")
             return order_response
         except ApiException as e:
-            logging.error(f"Exception when calling OrderApi->cancel_order: {e}")
+            logging.error(f"Exception when calling OrderApiV3->cancel_order: {e}")
             return None
 
     def place_gtt_order(self, instrument_token, transaction_type, trigger_price, price, quantity):
         """
         Places a Good Till Triggered (GTT) order.
-        NOTE: The upstox-python-sdk might not have a direct GTT placement method.
-              This is a placeholder for the actual implementation.
         """
         if config.PAPER_TRADING:
             logging.info(f"PAPER TRADING: Placing GTT {transaction_type} order for {instrument_token} at trigger price {trigger_price}.")
-            # In paper trading, we can simulate setting the stop-loss directly
             if instrument_token in self.paper_positions:
                 self.paper_positions[instrument_token]['stop_loss_price'] = trigger_price
             return True
 
-        logging.warning("GTT order placement is not implemented yet.")
-        return None
+        try:
+            order_api = upstox_client.OrderApiV3(self.api_client)
+            triggered_order = upstox_client.GttOrderV3(
+                transaction_type=transaction_type,
+                product="I",
+                order_type="LIMIT",
+                quantity=quantity,
+                price=price
+            )
+            condition = upstox_client.GttConditionV3(
+                trigger_values=[trigger_price],
+                instrument_token=instrument_token
+            )
+            body = upstox_client.PlaceGttOrderV3Request(
+                condition=condition,
+                orders=[triggered_order]
+            )
+            order_response = order_api.place_gtt_order(body=body)
+            logging.info(f"GTT Order placed successfully: {order_response}")
+            return order_response
+        except ApiException as e:
+            logging.error(f"Exception when calling OrderApiV3->place_gtt_order: {e}")
+            return None
 
     def get_paper_positions(self):
         """
