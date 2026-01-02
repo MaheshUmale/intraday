@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import MagicMock
 import pandas as pd
 from trading_bot.strategy.strategy import (
     classify_day_type, DayType, calculate_microstructure_score,
@@ -38,10 +39,16 @@ class TestStrategy(unittest.TestCase):
         self.assertGreater(stop_loss, 100)
 
     def test_calculate_pcr(self):
-        option_chain = [
-            {'put_options': {'open_interest': 100}, 'call_options': {'open_interest': 50}},
-            {'put_options': {'open_interest': 200}, 'call_options': {'open_interest': 100}},
-        ]
+        # Mocking the OptionStrikeData objects
+        mock_strike_1 = MagicMock()
+        mock_strike_1.put_options.open_interest = 100
+        mock_strike_1.call_options.open_interest = 50
+
+        mock_strike_2 = MagicMock()
+        mock_strike_2.put_options.open_interest = 200
+        mock_strike_2.call_options.open_interest = 100
+
+        option_chain = [mock_strike_1, mock_strike_2]
         pcr = calculate_pcr(option_chain)
         self.assertEqual(pcr, (100 + 200) / (50 + 100))
 
