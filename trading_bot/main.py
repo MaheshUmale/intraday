@@ -12,8 +12,6 @@ from trading_bot.strategy.strategy import (
     detect_accumulation, detect_distribution
 )
 import trading_bot.config as config
-from google.protobuf.json_format import MessageToDict
-from upstox_client.feeder.proto import MarketDataFeedV3_pb2 as MarketFeed_pb2
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,12 +24,6 @@ fh.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(message)s')
 fh.setFormatter(formatter)
 trade_logger.addHandler(fh)
-
-def decode_protobuf(buffer):
-    """Decodes a Protobuf message."""
-    feed = MarketFeed_pb2.FeedResponse()
-    feed.ParseFromString(buffer)
-    return feed
 
 class TradingBot:
     """
@@ -48,75 +40,7 @@ class TradingBot:
         self.hunter_zone = {}
         self.strategies = {}
         self.open_positions = {}
-        self.one_minute_candles = {}
-        self.last_known_volume = {}
-
-    def _on_message(self, message, timestamp=None):
-        """
-        Callback function to handle incoming market data.
-        If timestamp is provided, it's used for backtesting.
-        Otherwise, the current time is used.
-        """
-        data = None
-        if isinstance(message, dict):
-            data = message
-        elif isinstance(message, bytes):
-            try:
-                decoded_data = decode_protobuf(message)
-                data = MessageToDict(decoded_data)
-            except Exception as e:
-                logging.error(f"Protobuf decode failed: {e}")
-                return
-
-        if not data or 'feeds' not in data:
-            return
-
-        for instrument_key, feed in data.get('feeds', {}).items():
-            # logging.info(f"{instrument_key}")
-            if 'fullFeed' in feed and 'marketFF' in feed.get('fullFeed', {}):
-                ltpc_data = feed['fullFeed']['marketFF'].get('ltpc')
-                if ltpc_data:
-                    price = ltpc_data.get('ltp')
-                    volume_change = ltpc_data.get('ltq')
-
-                    # logging.info(f"Received data for {instrument_key}: Price={price}, Volume Change={volume_change}")
-
-                    # Live Stop-Loss Monitoring
-                    # Use the provided timestamp, or default to the current time for live trading
-                    current_time = timestamp if timestamp else datetime.now()
-                    if instrument_key in self.open_positions:
-                        self.monitor_stop_loss(instrument_key, self.open_positions[instrument_key], price, current_time)
-
-                    # Candle Aggregation
-                    current_minute = current_time.replace(second=0, microsecond=0)
-
-                    if instrument_key not in self.one_minute_candles:
-                        self.one_minute_candles[instrument_key] = {
-                            'timestamp': current_minute,
-                            'open': price,
-                            'high': price,
-                            'low': price,
-                            'close': price,
-                            'volume': volume_change
-                        }
-                    else:
-                        candle = self.one_minute_candles[instrument_key]
-                        if current_minute > candle['timestamp']:
-                            # Pass the timestamp of the completed candle to the strategy
-                            self.execute_strategy(instrument_key, pd.DataFrame([candle]), candle['timestamp'])
-                            self.one_minute_candles[instrument_key] = {
-                                'timestamp': current_minute,
-                                'open': price,
-                                'high': price,
-                                'low': price,
-                                'close': price,
-                                'volume': volume_change
-                            }
-                        else:
-                            candle['high'] = max(candle['high'], price)
-                            candle['low'] = min(candle['low'], price)
-                            candle['close'] = price
-                            candle['volume'] += volume_change
+        self.last_processed_timestamp = {}
 
 
     def run(self):
@@ -162,39 +86,58 @@ class TradingBot:
         The main trading loop.
         """
         logging.info("Entering main trading loop...")
-        condition = True
-        try: 
-            while condition:
-                now = datetime.now()
-                if self._is_market_hours(now):
-                    if not self.data_handler.market_data_streamer:
-                        if self.config.PAPER_TRADING:
-                            self.open_positions = self.order_manager.get_paper_positions()
-                        instrument_keys = self.data_handler.getNiftyAndBNFnOKeys(self.api_client)
-                        # Dynamically update config.INSTRUMENTS with the fetched keys
-                        self.config.INSTRUMENTS.clear()
-                        self.config.INSTRUMENTS.extend(instrument_keys)
-                         # For live trading, timestamp is None
-                        self.data_handler.start_market_data_stream(instrument_keys, on_message=lambda msg: self._on_message(msg, None))
-                        self.calculate_hunter_zone(now)
-                else:
-                    if self.data_handler.market_data_streamer:
-                        self.data_handler.stop_market_data_stream()
+
+        instrument_keys = self.data_handler.getNiftyAndBNFnOKeys(self.api_client)
+        self.config.INSTRUMENTS.clear()
+        self.config.INSTRUMENTS.extend(instrument_keys)
+        self.calculate_hunter_zone(datetime.now())
+
+        if self.config.PAPER_TRADING:
+            self.open_positions = self.order_manager.get_paper_positions()
+
+        while True:
+            now = datetime.now()
+            if self._is_market_hours(now):
+                self.fetch_and_process_candles()
+
+            # Sleep until the next minute
+            next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+            sleep_duration = (next_minute - now).total_seconds()
+            try:
+                time.sleep(sleep_duration)
+            except KeyboardInterrupt:
+                logging.info("Trading loop interrupted. Shutting down.")
+                break
+
+    def fetch_and_process_candles(self):
+        """
+        Fetches the latest 1-minute candle data and executes the strategy.
+        """
+        for instrument_key in self.config.INSTRUMENTS:
+            try:
+                candles = self.data_handler.get_intra_day_candle_data(instrument_key, 'minutes', '1')
+                if not candles:
+                    continue
+
+                # The last candle in the list is the most recent one
+                latest_candle = candles[-1]
+                candle_timestamp = datetime.fromisoformat(latest_candle['timestamp'])
                 
-                 # CRITICAL: This sleep allows Python to handle OS signals (like Ctrl+C)
-                try:
-                    time.sleep(100) 
-                except KeyboardInterrupt:
-                    # Catch the interrupt here to allow a graceful exit from the loop
-                    print("Caught KeyboardInterrupt within loop, exiting.")
-                    condition =False
-                    sys.exit(1)
-                    break
+                # Check if this candle has already been processed
+                if self.last_processed_timestamp.get(instrument_key) == candle_timestamp:
+                    continue
+
+                # Update the last processed timestamp
+                self.last_processed_timestamp[instrument_key] = candle_timestamp
+
+                # Convert to DataFrame for strategy execution
+                df = pd.DataFrame([latest_candle], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
                 
-        except KeyboardInterrupt:
-            # Catch the interrupt here to allow a graceful exit from the loop
-            print("Caught KeyboardInterrupt within loop, exiting.")
-            
+                self.execute_strategy(instrument_key, df, candle_timestamp)
+
+            except Exception as e:
+                logging.error(f"Error processing candles for {instrument_key}: {e}", exc_info=True)
 
 
     def _is_market_hours(self, now):
@@ -333,26 +276,6 @@ class TradingBot:
                 timestamp=timestamp # Pass timestamp to strategy
             )
     
-    def shutdown(self):
-        """
-        Gracefully shuts down the trading bot.
-        """
-        logging.info("Shutting down the trading bot...")
-        if self.data_handler:
-            self.data_handler.stop_market_data_stream()
-        logging.info("Trading bot has been shut down.")
-
-
-    def shutdown(self):
-        """
-        Gracefully shuts down the trading bot.
-        """
-        logging.info("Shutting down the trading bot...")
-        if self.data_handler:
-            self.data_handler.stop_market_data_stream()
-        logging.info("Trading bot has been shut down.")
-
-
 import time
 import signal
 import sys
@@ -367,7 +290,4 @@ signal.signal(signal.SIGINT, signal_handler)
 
 if __name__ == "__main__":
     bot = TradingBot()
-    try:
-        bot.run()
-    except KeyboardInterrupt:
-        bot.shutdown()
+    bot.run()

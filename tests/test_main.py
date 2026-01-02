@@ -13,72 +13,6 @@ class TestTradingBot(unittest.TestCase):
         self.bot.order_manager = MagicMock()
         self.bot.strategies = {DayType.BEARISH_TREND: MagicMock()}
 
-    def test_on_message_candle_aggregation_new(self):
-        # Arrange
-        message = {
-            'feeds': {
-                'TEST_KEY': {
-                    'fullFeed': {
-                        'marketFF': {
-                            'ltpc': {
-                                'ltp': 100,
-                                'ltq': 50
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        # Act
-        self.bot._on_message(message)
-
-        # Assert
-        self.assertIn('TEST_KEY', self.bot.one_minute_candles)
-        self.assertEqual(self.bot.one_minute_candles['TEST_KEY']['open'], 100)
-        self.assertEqual(self.bot.one_minute_candles['TEST_KEY']['volume'], 50)
-
-    def test_on_message_candle_aggregation_update(self):
-        # Arrange
-        initial_message = {
-            'feeds': {
-                'TEST_KEY': {
-                    'fullFeed': {
-                        'marketFF': {
-                            'ltpc': {
-                                'ltp': 100,
-                                'ltq': 50
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        update_message = {
-            'feeds': {
-                'TEST_KEY': {
-                    'fullFeed': {
-                        'marketFF': {
-                            'ltpc': {
-                                'ltp': 105,
-                                'ltq': 75
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        self.bot._on_message(initial_message)
-
-        # Act
-        self.bot._on_message(update_message)
-
-        # Assert
-        candle = self.bot.one_minute_candles['TEST_KEY']
-        self.assertEqual(candle['high'], 105)
-        self.assertEqual(candle['close'], 105)
-        self.assertEqual(candle['volume'], 125) # 50 + 75
-
     @patch('trading_bot.main.classify_day_type')
     @patch('trading_bot.main.calculate_pcr')
     @patch('trading_bot.main.calculate_microstructure_score')
@@ -99,6 +33,20 @@ class TestTradingBot(unittest.TestCase):
         # Assert
         self.bot.strategies[DayType.BEARISH_TREND].execute.assert_called_once()
         config.USE_ADVANCED_VOLUME_ANALYSIS = True
+
+    @patch('trading_bot.main.TradingBot.execute_strategy')
+    def test_fetch_and_process_candles(self, mock_execute_strategy):
+        # Arrange
+        self.bot.config.INSTRUMENTS = ['TEST_KEY']
+        candle_data = [{'timestamp': '2024-01-01T10:00:00', 'open': 100, 'high': 105, 'low': 95, 'close': 102, 'volume': 1000, 'oi': 0}]
+        self.bot.data_handler.get_intra_day_candle_data.return_value = candle_data
+
+        # Act
+        self.bot.fetch_and_process_candles()
+
+        # Assert
+        mock_execute_strategy.assert_called_once()
+        self.assertEqual(self.bot.last_processed_timestamp['TEST_KEY'], pd.Timestamp('2024-01-01T10:00:00'))
 
 
 if __name__ == '__main__':
