@@ -58,7 +58,7 @@ class DataHandler:
             logging.error(f"Exception when calling HistoryV3Api->get_historical_candle_data1: {e}")
             return None
 
-    def get_intra_day_candle_data(self, instrument_key, interval):
+    def get_intra_day_candle_data(self, instrument_key, interval_unit, interval_value):
         """
         Fetches intraday candle data.
         """
@@ -66,7 +66,8 @@ class DataHandler:
             history_api = upstox_client.HistoryV3Api(self.api_client)
             api_response = history_api.get_intra_day_candle_data(
                 instrument_key,
-                interval
+                interval_unit,
+                interval_value
             )
             logging.info(f"Fetched intraday data for {instrument_key}")
             return api_response.data.candles
