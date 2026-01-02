@@ -1,6 +1,0 @@
-2026-01-02 05:47:44,531 - INFO - Starting the trading bot...
-2026-01-02 05:47:44,543 - INFO - API client configured with access token.
-2026-01-02 05:47:44,543 - INFO - Authentication successful.
-2026-01-02 05:47:44,543 - WARNING - instrument_keys.json not found or invalid. Instrument lookups will fail.
-2026-01-02 05:47:44,543 - INFO - Modules initialized.
-2026-01-02 05:47:44,543 - INFO - Entering main trading loop...
