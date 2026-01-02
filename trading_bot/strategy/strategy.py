@@ -81,14 +81,13 @@ class HunterTrade(TacticalTemplate):
             option_instrument_key = None
 
             if option_chain:
-                for item in option_chain:
-                    if item.get('strike_price') == atm_strike:
-                        if direction == 'BULL':
-                            option_instrument_key = item.get('call_options', {}).get('instrument_key')
-                        else: # BEAR
-                            option_instrument_key = item.get('put_options', {}).get('instrument_key')
+                for strike_data in option_chain:
+                    if strike_data.strike_price == atm_strike:
+                        if direction == 'BULL' and strike_data.call_options:
+                            option_instrument_key = strike_data.call_options.instrument_key
+                        elif direction == 'BEAR' and strike_data.put_options:
+                            option_instrument_key = strike_data.put_options.instrument_key
                         break
-
             if not option_instrument_key:
                 logging.warning(f"Could not find ATM option for {instrument_key} at strike {atm_strike}. Skipping trade.")
                 return
@@ -181,12 +180,12 @@ class P2PTrend(TacticalTemplate):
 
             option_chain = kwargs.get('option_chain')
             if option_chain:
-                for item in option_chain:
-                    if item.get('strike_price') == atm_strike:
-                        if direction == 'BULL':
-                            option_instrument_key = item.get('call_options', {}).get('instrument_key')
-                        else: # BEAR
-                            option_instrument_key = item.get('put_options', {}).get('instrument_key')
+                for strike_data in option_chain:
+                    if strike_data.strike_price == atm_strike:
+                        if direction == 'BULL' and strike_data.call_options:
+                            option_instrument_key = strike_data.call_options.instrument_key
+                        elif direction == 'BEAR' and strike_data.put_options:
+                            option_instrument_key = strike_data.put_options.instrument_key
                         break
 
             if not option_instrument_key:
@@ -293,12 +292,12 @@ class MeanReversion(TacticalTemplate):
 
                 option_chain = kwargs.get('option_chain')
                 if option_chain:
-                    for item in option_chain:
-                        if item.get('strike_price') == atm_strike:
-                            if direction == 'BULL':
-                                option_instrument_key = item.get('call_options', {}).get('instrument_key')
-                            else: # BEAR
-                                option_instrument_key = item.get('put_options', {}).get('instrument_key')
+                    for strike_data in option_chain:
+                        if strike_data.strike_price == atm_strike:
+                            if direction == 'BULL' and strike_data.call_options:
+                                option_instrument_key = strike_data.call_options.instrument_key
+                            elif direction == 'BEAR' and strike_data.put_options:
+                                option_instrument_key = strike_data.put_options.instrument_key
                             break
 
                 if not option_instrument_key:
@@ -351,14 +350,16 @@ def calculate_pcr(option_chain):
     total_put_oi = 0
     total_call_oi = 0
     if not option_chain:
-        return 1.0 # Neutral PCR if data is unavailable
+        return 1.0  # Neutral PCR if data is unavailable
 
-    for item in option_chain:
-        total_put_oi += item.get('put_options', {}).get('open_interest', 0)
-        total_call_oi += item.get('call_options', {}).get('open_interest', 0)
+    for strike_data in option_chain:
+        if strike_data.put_options:
+            total_put_oi += strike_data.put_options.open_interest or 0
+        if strike_data.call_options:
+            total_call_oi += strike_data.call_options.open_interest or 0
 
     if total_call_oi == 0:
-        return 100.0 # Assign a high value if no calls, indicating extreme bullishness
+        return 100.0  # Assign a high value if no calls, indicating extreme bullishness
 
     return total_put_oi / total_call_oi
 
