@@ -68,61 +68,50 @@ class TradingBot:
         if not data or 'feeds' not in data:
             return
 
-        feed = data['feeds']
-        # The key in the feed dictionary is the instrument key
-        instrument_key = list(feed.keys())[0]
+        for instrument_key, feed in data.get('feeds', {}).items():
+            if 'marketFF' in feed.get('ff', {}):
+                ltpc_data = feed['ff']['marketFF'].get('ltpc')
+                if ltpc_data:
+                    price = ltpc_data.get('ltp')
+                    volume_change = ltpc_data.get('ltq')
 
-        # Extract the LTP (Last Traded Price) and volume from the feed
-        ltp_data = feed[instrument_key].get('ff', {}).get('marketFF', {}).get('ltpc', {})
-        if not ltp_data:
-            return
+                    logging.info(f"Received data for {instrument_key}: Price={price}, Volume Change={volume_change}")
 
-        price = ltp_data.get('ltp')
-        cumulative_volume = ltp_data.get('vtt')
+                    # Live Stop-Loss Monitoring
+                    if instrument_key in self.open_positions:
+                        self.monitor_stop_loss(instrument_key, self.open_positions[instrument_key], price)
 
-        logging.info(f"Received data for {instrument_key}: Price={price}, Volume={cumulative_volume}")
+                    # Candle Aggregation
+                    now = datetime.now()
+                    current_minute = now.replace(second=0, microsecond=0)
 
-        # Live Stop-Loss Monitoring
-        if instrument_key in self.open_positions:
-            self.monitor_stop_loss(instrument_key, self.open_positions[instrument_key], price)
+                    if instrument_key not in self.one_minute_candles:
+                        self.one_minute_candles[instrument_key] = {
+                            'timestamp': current_minute,
+                            'open': price,
+                            'high': price,
+                            'low': price,
+                            'close': price,
+                            'volume': volume_change
+                        }
+                    else:
+                        candle = self.one_minute_candles[instrument_key]
+                        if current_minute > candle['timestamp']:
+                            self.execute_strategy(instrument_key, pd.DataFrame([candle]))
+                            self.one_minute_candles[instrument_key] = {
+                                'timestamp': current_minute,
+                                'open': price,
+                                'high': price,
+                                'low': price,
+                                'close': price,
+                                'volume': volume_change
+                            }
+                        else:
+                            candle['high'] = max(candle['high'], price)
+                            candle['low'] = min(candle['low'], price)
+                            candle['close'] = price
+                            candle['volume'] += volume_change
 
-        # Calculate volume change from cumulative volume
-        last_volume = self.last_known_volume.get(instrument_key, 0)
-        volume_change = cumulative_volume - last_volume
-        if volume_change < 0:
-            volume_change = cumulative_volume
-        self.last_known_volume[instrument_key] = cumulative_volume
-
-        # Candle Aggregation
-        now = datetime.now()
-        current_minute = now.replace(second=0, microsecond=0)
-
-        if instrument_key not in self.one_minute_candles:
-            self.one_minute_candles[instrument_key] = {
-                'timestamp': current_minute,
-                'open': price,
-                'high': price,
-                'low': price,
-                'close': price,
-                'volume': volume_change
-            }
-        else:
-            candle = self.one_minute_candles[instrument_key]
-            if current_minute > candle['timestamp']:
-                self.execute_strategy(instrument_key, pd.DataFrame([candle]))
-                self.one_minute_candles[instrument_key] = {
-                    'timestamp': current_minute,
-                    'open': price,
-                    'high': price,
-                    'low': price,
-                    'close': price,
-                    'volume': volume_change
-                }
-            else:
-                candle['high'] = max(candle['high'], price)
-                candle['low'] = min(candle['low'], price)
-                candle['close'] = price
-                candle['volume'] += volume_change
 
     def run(self):
         """

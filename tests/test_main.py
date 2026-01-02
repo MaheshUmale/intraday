@@ -22,7 +22,7 @@ class TestTradingBot(unittest.TestCase):
                         'marketFF': {
                             'ltpc': {
                                 'ltp': 100,
-                                'vtt': 1000
+                                'ltq': 50
                             }
                         }
                     }
@@ -36,6 +36,7 @@ class TestTradingBot(unittest.TestCase):
         # Assert
         self.assertIn('TEST_KEY', self.bot.one_minute_candles)
         self.assertEqual(self.bot.one_minute_candles['TEST_KEY']['open'], 100)
+        self.assertEqual(self.bot.one_minute_candles['TEST_KEY']['volume'], 50)
 
     def test_on_message_candle_aggregation_update(self):
         # Arrange
@@ -46,7 +47,7 @@ class TestTradingBot(unittest.TestCase):
                         'marketFF': {
                             'ltpc': {
                                 'ltp': 100,
-                                'vtt': 1000
+                                'ltq': 50
                             }
                         }
                     }
@@ -60,7 +61,7 @@ class TestTradingBot(unittest.TestCase):
                         'marketFF': {
                             'ltpc': {
                                 'ltp': 105,
-                                'vtt': 1500
+                                'ltq': 75
                             }
                         }
                     }
@@ -76,7 +77,7 @@ class TestTradingBot(unittest.TestCase):
         candle = self.bot.one_minute_candles['TEST_KEY']
         self.assertEqual(candle['high'], 105)
         self.assertEqual(candle['close'], 105)
-        self.assertEqual(candle['volume'], 1500)
+        self.assertEqual(candle['volume'], 125) # 50 + 75
 
     @patch('trading_bot.main.classify_day_type')
     @patch('trading_bot.main.calculate_pcr')
