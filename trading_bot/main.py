@@ -37,10 +37,11 @@ class TradingBot:
     """
     The main class for the trading bot.
     """
-    def __init__(self):
+    def __init__(self, config_override=None):
         """
         Initializes the TradingBot.
         """
+        self.config = config_override if config_override else config
         self.api_client = None
         self.data_handler = None
         self.order_manager = None
@@ -163,12 +164,12 @@ class TradingBot:
                 now = datetime.now()
                 if self._is_market_hours(now):
                     if not self.data_handler.market_data_streamer:
-                        if config.PAPER_TRADING:
+                        if self.config.PAPER_TRADING:
                             self.open_positions = self.order_manager.get_paper_positions()
                         instrument_keys = self.data_handler.getNiftyAndBNFnOKeys(self.api_client)
                         # Dynamically update config.INSTRUMENTS with the fetched keys
-                        config.INSTRUMENTS.clear()
-                        config.INSTRUMENTS.extend(instrument_keys)
+                        self.config.INSTRUMENTS.clear()
+                        self.config.INSTRUMENTS.extend(instrument_keys)
                         self.data_handler.start_market_data_stream(instrument_keys, on_message=self._on_message)
                         self.calculate_hunter_zone(now)
                 else:
@@ -223,7 +224,7 @@ class TradingBot:
         to_date = current_datetime.strftime('%Y-%m-%d')
         from_date = (current_datetime - timedelta(days=10)).strftime('%Y-%m-%d')
 
-        for instrument_key in config.INSTRUMENTS:
+        for instrument_key in self.config.INSTRUMENTS:
             try:
                 # Fetch data for the last 10 days to ensure we get the last trading day
                 candles = self.data_handler.get_historical_candle_data(
@@ -294,7 +295,7 @@ class TradingBot:
         price = df['close'].iloc[-1]
         score = calculate_microstructure_score(price, evwma_1m, evwma_5m, evwma_1m_slope, evwma_5m_slope)
         logging.info(f"Instrument: {instrument_key}, Day Type: {day_type.value}, Score: {score}")
-        if config.USE_ADVANCED_VOLUME_ANALYSIS:
+        if self.config.USE_ADVANCED_VOLUME_ANALYSIS:
             ppv = detect_pocket_pivot_volume(df)
             pnv = detect_pivot_negative_volume(df)
             accumulation = detect_accumulation(df)
