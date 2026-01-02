@@ -12,6 +12,8 @@ from trading_bot.strategy.strategy import (
     detect_accumulation, detect_distribution
 )
 import trading_bot.config as config
+from google.protobuf.json_format import MessageToDict
+from upstox_client.feeder.proto import MarketDataFeedV3_pb2 as MarketFeed_pb2
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,6 +26,12 @@ fh.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(message)s')
 fh.setFormatter(formatter)
 trade_logger.addHandler(fh)
+
+def decode_protobuf(buffer):
+    """Decodes a Protobuf message."""
+    feed = MarketFeed_pb2.FeedResponse()
+    feed.ParseFromString(buffer)
+    return feed
 
 class TradingBot:
     """
@@ -46,9 +54,33 @@ class TradingBot:
         """
         Callback function to handle incoming market data.
         """
-        instrument_key = message['instrument_key']
-        price = message['last_price']
-        cumulative_volume = message.get('volume', 0)
+        data = None
+        if isinstance(message, dict):
+            data = message
+        elif isinstance(message, bytes):
+            try:
+                decoded_data = decode_protobuf(message)
+                data = MessageToDict(decoded_data)
+            except Exception as e:
+                logging.error(f"Protobuf decode failed: {e}")
+                return
+
+        if not data or 'feeds' not in data:
+            return
+
+        feed = data['feeds']
+        # The key in the feed dictionary is the instrument key
+        instrument_key = list(feed.keys())[0]
+
+        # Extract the LTP (Last Traded Price) and volume from the feed
+        ltp_data = feed[instrument_key].get('ff', {}).get('marketFF', {}).get('ltpc', {})
+        if not ltp_data:
+            return
+
+        price = ltp_data.get('ltp')
+        cumulative_volume = ltp_data.get('vtt')
+
+        logging.info(f"Received data for {instrument_key}: Price={price}, Volume={cumulative_volume}")
 
         # Live Stop-Loss Monitoring
         if instrument_key in self.open_positions:
@@ -57,11 +89,9 @@ class TradingBot:
         # Calculate volume change from cumulative volume
         last_volume = self.last_known_volume.get(instrument_key, 0)
         volume_change = cumulative_volume - last_volume
-        # Handle potential reset of cumulative volume at the start of a day or session
         if volume_change < 0:
             volume_change = cumulative_volume
         self.last_known_volume[instrument_key] = cumulative_volume
-
 
         # Candle Aggregation
         now = datetime.now()
@@ -79,10 +109,7 @@ class TradingBot:
         else:
             candle = self.one_minute_candles[instrument_key]
             if current_minute > candle['timestamp']:
-                # New candle - process the completed one
                 self.execute_strategy(instrument_key, pd.DataFrame([candle]))
-
-                # Start a new candle
                 self.one_minute_candles[instrument_key] = {
                     'timestamp': current_minute,
                     'open': price,
@@ -92,7 +119,6 @@ class TradingBot:
                     'volume': volume_change
                 }
             else:
-                # Update current candle
                 candle['high'] = max(candle['high'], price)
                 candle['low'] = min(candle['low'], price)
                 candle['close'] = price
@@ -103,17 +129,10 @@ class TradingBot:
         Main function to run the trading bot.
         """
         logging.info("Starting the trading bot...")
-
         try:
-            # Step 1: Authenticate and get the API client
             self._authenticate()
-
-            # Step 2: Initialize the data handler and order manager
             self._initialize_modules()
-
-            # Step 3: Enter the main trading loop
             self._trading_loop()
-
         except Exception as e:
             logging.error(f"An unexpected error occurred in the main run loop: {e}", exc_info=True)
 
@@ -148,22 +167,18 @@ class TradingBot:
         The main trading loop.
         """
         logging.info("Entering main trading loop...")
-
         while True:
             now = datetime.now()
-
             if self._is_market_hours(now):
                 if not self.data_handler.market_data_streamer:
                     if config.PAPER_TRADING:
                         self.open_positions = self.order_manager.get_paper_positions()
-
                     instrument_keys = self.data_handler.getNiftyAndBNFnOKeys()
                     self.data_handler.start_market_data_stream(instrument_keys, on_message=self._on_message)
                     self.calculate_hunter_zone(now)
             else:
                 if self.data_handler.market_data_streamer:
                     self.data_handler.stop_market_data_stream()
-
             time.sleep(1)
 
     def _is_market_hours(self, now):
@@ -177,28 +192,21 @@ class TradingBot:
         Monitors the stop-loss for a given position.
         """
         stop_loss_price = position['stop_loss_price']
-
         if (position['direction'] == 'BULL' and current_price <= stop_loss_price) or \
            (position['direction'] == 'BEAR' and current_price >= stop_loss_price):
             logging.info(f"Stop-loss triggered for {instrument_key} at {current_price}. Closing position.")
             trade_logger.info(f"EXIT: Stop-loss, {instrument_key}, {position['transaction_type']}, {current_price}")
             self.order_manager.place_order(
-                quantity=1,
-                product="I",
-                validity="DAY",
-                price=0,
-                instrument_token=position['instrument_key'],
-                order_type="MARKET",
-                transaction_type="SELL",
-                tag="stop_loss_exit"
+                quantity=1, product="I", validity="DAY", price=0,
+                instrument_token=position['instrument_key'], order_type="MARKET",
+                transaction_type="SELL", tag="stop_loss_exit"
             )
             self.order_manager.close_paper_position(position['instrument_key'])
             del self.open_positions[instrument_key]
 
     def calculate_hunter_zone(self, current_datetime):
         """
-        Calculates the Hunter Zone for each instrument based on the last 60 minutes
-        of the previous trading day.
+        Calculates the Hunter Zone for each instrument.
         """
         logging.info("Calculating Hunter Zone...")
         for instrument_key in config.INSTRUMENTS:
@@ -211,14 +219,11 @@ class TradingBot:
                         df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
                         break
                 except Exception as e:
-                    logging.error(f"Failed to fetch historical data for hunter zone calculation: {e}", exc_info=True)
+                    logging.error(f"Failed to fetch historical data: {e}", exc_info=True)
             if 'df' in locals() and df is not None:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
-
-                # Filter for the last 60 minutes of the previous trading day
                 last_day_data = df[df['timestamp'].dt.date == pd.to_datetime(to_date).date()]
                 last_60_min_data = last_day_data[last_day_data['timestamp'].dt.time >= dt_time(14, 30)]
-
                 if not last_60_min_data.empty:
                     self.hunter_zone[instrument_key] = {
                         'high': last_60_min_data['high'].max(),
@@ -231,67 +236,40 @@ class TradingBot:
         Executes the trading strategy for a given instrument.
         """
         logging.info(f"Executing strategy for {instrument_key}...")
-
-        # 1. Check for open positions
         if instrument_key in self.open_positions:
             logging.info(f"Position already open for {instrument_key}. Skipping.")
             return
-
-        # 2. Get Hunter Zone
         if instrument_key not in self.hunter_zone:
             logging.warning(f"Hunter Zone not available for {instrument_key}. Skipping.")
             return
-
         hunter_zone = self.hunter_zone[instrument_key]
-
         opening_price = df['open'].iloc[0]
-
-        # 3. Calculate PCR
         option_chain = self.data_handler.get_option_chain(instrument_key, datetime.now().strftime('%Y-%m-%d'))
         if not option_chain:
             logging.warning(f"Could not fetch option chain for {instrument_key}. Skipping.")
             return
-
         pcr = calculate_pcr(option_chain)
-
-        # 4. Classify Day Type
         day_type = classify_day_type(opening_price, hunter_zone['high'], hunter_zone['low'], pcr)
-
-        # 5. Calculate Microstructure Score
-
-        # Calculate 1-minute EVWMA
         df_1m = calculate_evwma(df.copy(), length=20)
         evwma_1m = df_1m['evwma'].iloc[-1]
         evwma_1m_slope = df_1m['evwma_slope'].iloc[-1]
-
-        # Calculate 5-minute EVWMA
         df_5m = df.resample('5T', on='timestamp').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}).dropna()
         df_5m = calculate_evwma(df_5m, length=20)
         evwma_5m = df_5m['evwma'].iloc[-1]
         evwma_5m_slope = df_5m['evwma_slope'].iloc[-1]
-
         price = df['close'].iloc[-1]
-
         score = calculate_microstructure_score(price, evwma_1m, evwma_5m, evwma_1m_slope, evwma_5m_slope)
-
         logging.info(f"Instrument: {instrument_key}, Day Type: {day_type.value}, Score: {score}")
-
-        # 6. VPA Signal Detection
         if config.USE_ADVANCED_VOLUME_ANALYSIS:
             ppv = detect_pocket_pivot_volume(df)
             pnv = detect_pivot_negative_volume(df)
             accumulation = detect_accumulation(df)
             distribution = detect_distribution(df)
-
-            logging.info(f"VPA Signals for {instrument_key}: PPV={ppv}, PNV={pnv}, Accumulation={accumulation}, Distribution={distribution}")
-
-            # Filter trade signal with VPA
+            logging.info(f"VPA Signals: PPV={ppv}, PNV={pnv}, Accumulation={accumulation}, Distribution={distribution}")
             if (score > 0 and not (ppv or accumulation)) or \
                (score < 0 and not (pnv or distribution)):
                 logging.info("VPA signals do not confirm the microstructure score. Skipping trade.")
                 return
-
-        # 7. Execute Trade
         strategy = self.strategies.get(day_type)
         if strategy:
             vpa_signal = None
@@ -300,20 +278,11 @@ class TradingBot:
                 elif pnv: vpa_signal = "PNV"
                 elif accumulation: vpa_signal = "Accumulation"
                 elif distribution: vpa_signal = "Distribution"
-
             strategy.execute(
-                score=score,
-                price=price,
-                vpa_signal=vpa_signal,
-                instrument_key=instrument_key,
-                hunter_zone=hunter_zone,
-                pcr=pcr,
-                day_type=day_type,
-                option_chain=option_chain,
-                open_positions=self.open_positions,
-                evwma_1m=evwma_1m,
-                evwma_5m=evwma_5m,
-                df=df
+                score=score, price=price, vpa_signal=vpa_signal,
+                instrument_key=instrument_key, hunter_zone=hunter_zone, pcr=pcr,
+                day_type=day_type, option_chain=option_chain, open_positions=self.open_positions,
+                evwma_1m=evwma_1m, evwma_5m=evwma_5m, df=df
             )
 
 if __name__ == "__main__":
