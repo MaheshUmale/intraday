@@ -8,3 +8,4 @@ __pycache__/
 # Data files
 data/
 trendlyne_data.db
+nse_instruments.json
