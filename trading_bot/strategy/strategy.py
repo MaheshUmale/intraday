@@ -369,7 +369,7 @@ def calculate_evwma(df, length=20):
     """
     if df.empty or 'volume' not in df.columns:
         return df
-    df['evwma'] = ta.vwma(df['high'], df['low'], df['close'], df['volume'], length=length)
+    df['evwma'] = ta.vwma(close=df['close'], volume=df['volume'], length=length)
     df['evwma_slope'] = df['evwma'].diff()
     return df
 
