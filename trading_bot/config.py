@@ -1,7 +1,7 @@
 # Trading configuration
 INSTRUMENTS = ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"]
 PAPER_TRADING = True
-USE_ADVANCED_VOLUME_ANALYSIS = True
+USE_ADVANCED_VOLUME_ANALYSIS = False
 
 # Strategy thresholds
 SCORE_THRESHOLD = 7

@@ -27,26 +27,36 @@ trade_logger.addHandler(fh)
 
 class TradingBot:
     """
-    The main class for the trading bot.
+    The main class for the algorithmic trading bot.
+
+    This class orchestrates the entire trading process, including authentication,
+    data fetching, strategy execution, and order management.
     """
     def __init__(self, config_override=None):
         """
         Initializes the TradingBot.
+
+        Args:
+            config_override (module, optional): A configuration module to override
+                                                the default settings. Defaults to None.
         """
         self.config = config_override if config_override else config
         self.api_client = None
         self.data_handler = None
         self.order_manager = None
-        self.hunter_zone = {}
-        self.strategies = {}
-        self.open_positions = {}
-        self.last_processed_timestamp = {}
-        self.latest_volume_cache = {}
+        self.hunter_zone = {}  # Stores high/low of the last 60 mins of the previous day
+        self.strategies = {}  # Maps day types to their corresponding trading strategies
+        self.open_positions = {}  # Tracks currently open positions
+        self.last_processed_timestamp = {}  # Prevents processing the same candle multiple times
+        self.latest_volume_cache = {}  # Caches the latest volume for futures contracts
 
 
     def run(self):
         """
-        Main function to run the trading bot.
+        The main entry point to start the trading bot.
+
+        This method handles the main execution loop, including authentication,
+        module initialization, and the primary trading loop.
         """
         logging.info("Starting the trading bot...")
         try:
@@ -69,10 +79,13 @@ class TradingBot:
 
     def _initialize_modules(self):
         """
-        Initializes the data handler and order manager.
+        Initializes and wires up the necessary components of the bot.
         """
         self.data_handler = DataHandler(self.api_client)
         self.order_manager = OrderManager(self.api_client)
+
+        # Map each classified day type to a specific trading strategy instance.
+        # This allows the bot to dynamically select the correct tactical template.
         self.strategies = {
             DayType.BULLISH_TREND: P2PTrend(self.order_manager),
             DayType.BEARISH_TREND: P2PTrend(self.order_manager),
@@ -84,7 +97,11 @@ class TradingBot:
 
     def _trading_loop(self):
         """
-        The main trading loop.
+        The main polling loop that runs continuously during market hours.
+
+        This loop fetches the full list of instruments, calculates the initial
+        Hunter Zone, and then enters a per-minute loop to fetch and process
+        the latest candle data.
         """
         logging.info("Entering main trading loop...")
 
@@ -112,29 +129,30 @@ class TradingBot:
 
     def fetch_and_process_candles(self):
         """
-        Fetches the latest 1-minute candle data and executes the strategy.
+        Called every minute to fetch the latest candle for each instrument,
+        prevent duplicate processing, and trigger strategy execution.
         """
         for instrument_key in self.config.INSTRUMENTS:
             try:
+                # Fetches the full intraday history for the instrument.
                 candles = self.data_handler.get_intra_day_candle_data(instrument_key, 'minutes', '1')
                 if not candles:
                     continue
 
-                # The last candle in the list is the most recent one
+                # The last candle in the list is the most recent one.
                 latest_candle = candles[-1]
                 candle_timestamp = datetime.fromisoformat(latest_candle['timestamp'])
                 
-                # Check if this candle has already been processed
+                # Prevent reprocessing the same candle in subsequent ticks.
                 if self.last_processed_timestamp.get(instrument_key) == candle_timestamp:
                     continue
 
-                # Update the last processed timestamp
                 self.last_processed_timestamp[instrument_key] = candle_timestamp
 
-                # Update the volume cache with the latest candle's volume
+                # Cache the latest volume for potential use in spot index calculations.
                 self.latest_volume_cache[instrument_key] = latest_candle.get('volume', 0)
 
-                # Convert the full candle list to a DataFrame for strategy execution
+                # Convert the full history of candles to a DataFrame for indicator calculations.
                 df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
                 
@@ -146,38 +164,57 @@ class TradingBot:
 
     def _is_market_hours(self, now):
         """
-        Checks if the current time is within market hours.
+        Checks if the current time is within the configured market hours.
+
+        Args:
+            now (datetime): The current datetime.
+
+        Returns:
+            bool: True if within market hours, False otherwise.
         """
         return dt_time(9, 15) <= now.time() <= dt_time(15, 30)
 
     def monitor_stop_loss(self, instrument_key, position, current_price, timestamp):
         """
-        Monitors the stop-loss for a given position.
+        Monitors and executes the stop-loss for a given open position.
+
+        Args:
+            instrument_key (str): The instrument key of the position.
+            position (dict): The dictionary containing position details.
+            current_price (float): The current market price of the instrument.
+            timestamp (datetime): The current timestamp for logging.
         """
         stop_loss_price = position['stop_loss_price']
+
+        # Check if the stop-loss is triggered based on the direction of the trade.
         if (position['direction'] == 'BULL' and current_price <= stop_loss_price) or \
            (position['direction'] == 'BEAR' and current_price >= stop_loss_price):
+
             logging.info(f"Stop-loss triggered for {instrument_key} at {current_price}. Closing position.")
             trade_logger.info(f"EXIT: Stop-loss, {instrument_key}, {position['transaction_type']}, {current_price}")
-            # The real exit order
+
+            # Place the exit order (works for both live and paper trading via OrderManager).
             self.order_manager.place_order(
                 quantity=1, product="I", validity="DAY", price=0,
                 instrument_token=position['instrument_key'], order_type="MARKET",
                 transaction_type="SELL", tag="stop_loss_exit",
                 timestamp=timestamp
             )
-            # Close the paper position with exit details
-            self.order_manager.close_paper_position(
-                instrument_key=position['instrument_key'],
-                exit_price=current_price,
-                exit_time=timestamp
-            )
+
+            # Remove the position from the open positions tracker.
             del self.open_positions[instrument_key]
 
     def calculate_hunter_zone(self, current_datetime):
         """
-        Calculates the Hunter Zone for each instrument by fetching the last 10 days
-        of data and identifying the most recent trading day.
+        Calculates the "Hunter Zone" for all tracked instruments.
+
+        The Hunter Zone is defined as the high and low of the last 60 minutes
+        of the previous trading day. This zone is a key input for classifying
+        the current day's market type.
+
+        Args:
+            current_datetime (datetime): The current datetime, used to determine
+                                         the date range for fetching historical data.
         """
         logging.info("Calculating Hunter Zone...")
         to_date = current_datetime.strftime('%Y-%m-%d')
@@ -222,9 +259,10 @@ class TradingBot:
             except Exception as e:
                 logging.error(f"Failed to calculate Hunter Zone for {instrument_key}: {e}", exc_info=True)
 
-    def execute_strategy(self, instrument_key, df, timestamp):
+    def execute_strategy(self, instrument_key, df, timestamp, option_chain=None):
         """
         Executes the trading strategy for a given instrument.
+        Can accept a pre-fetched option_chain to avoid redundant API calls.
         """
         if df.empty:
             return
@@ -240,13 +278,19 @@ class TradingBot:
         opening_price = df['open'].iloc[0]
 
         symbol = None
-        # Prioritize BANKNIFTY check as it also contains NIFTY
-        if 'BANKNIFTY' in instrument_key or 'Nifty Bank' in instrument_key:
-            symbol = 'BANKNIFTY'
-        elif 'NIFTY' in instrument_key or 'Nifty 50' in instrument_key:
-            symbol = 'NIFTY'
+        # Efficiently look up the symbol for the given instrument key.
+        if instrument_key.startswith('NSE_FO'):
+            # Use the pre-computed inverted map for O(1) lookup.
+            symbol = self.data_handler.instrument_to_symbol_map.get(instrument_key)
+        else:
+            # For indices, derive the symbol from the key itself.
+            if 'BANKNIFTY' in instrument_key or 'Nifty Bank' in instrument_key:
+                symbol = 'BANKNIFTY'
+            elif 'NIFTY' in instrument_key or 'Nifty 50' in instrument_key:
+                symbol = 'NIFTY'
 
-        # Volume substitution for spot indexes
+        # For spot indices (which don't have their own volume), substitute the volume
+        # from their corresponding futures contract for more accurate indicator calculations.
         if instrument_key in ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"] and df['volume'].iloc[-1] == 0:
             future_key = self.data_handler.instrument_mapping.get(symbol, {}).get('future')
             if future_key and future_key in self.latest_volume_cache:
@@ -263,7 +307,9 @@ class TradingBot:
         # Determine the correct underlying instrument key for the option chain API call
         underlying_instrument = "NSE_INDEX|Nifty 50" if symbol == 'NIFTY' else "NSE_INDEX|Nifty Bank"
 
-        option_chain = self.data_handler.get_option_chain(underlying_instrument, expiry_date)
+        if option_chain is None: # Fetch only if not provided (i.e., in live mode)
+            option_chain = self.data_handler.get_option_chain(underlying_instrument, expiry_date)
+
         if not option_chain:
             logging.warning(f"Could not fetch option chain for {underlying_instrument} with expiry {expiry_date}. Skipping.")
             return
@@ -273,8 +319,19 @@ class TradingBot:
         df_1m = calculate_evwma(df.copy(), length=20)
         evwma_1m = df_1m['evwma'].iloc[-1]
         evwma_1m_slope = df_1m['evwma_slope'].iloc[-1]
-        df_5m = df.resample('5T', on='timestamp').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}).dropna()
+
+        # Resample to 5-minute timeframe for multi-timeframe analysis.
+        df_5m = df.resample('5min', on='timestamp').agg({
+            'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+        }).dropna()
+
         df_5m = calculate_evwma(df_5m, length=20)
+
+        # Ensure there is data in the 5-minute dataframe before accessing.
+        if df_5m.empty:
+            logging.warning(f"Not enough data to generate 5-minute candles for {instrument_key}. Skipping.")
+            return
+
         evwma_5m = df_5m['evwma'].iloc[-1]
         evwma_5m_slope = df_5m['evwma_slope'].iloc[-1]
         price = df['close'].iloc[-1]

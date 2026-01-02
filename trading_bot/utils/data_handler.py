@@ -16,25 +16,44 @@ from upstox_client import MarketDataStreamerV3, ApiClient, Configuration
 
 class DataHandler:
     """
-    Handles data fetching from the Upstox API.
+    Handles all interactions with the Upstox API for market data,
+    instrument discovery, and historical data retrieval.
     """
     def __init__(self, api_client):
         """
         Initializes the DataHandler.
+
+        Args:
+            api_client: An authenticated Upstox API client instance.
         """
         self.api_client = api_client
         self.market_data_streamer = None
-        self.expiry_dates = {}
-        self.instrument_mapping = {}  # To store the full mapping
+        self.expiry_dates = {}  # Stores nearest expiry dates for symbols like 'NIFTY'
+        self.instrument_mapping = {}  # Stores detailed instrument data for futures and options
+        self.instrument_to_symbol_map = {} # Inverted map for fast lookups
         self.instrument_keys = self.getNiftyAndBNFnOKeys(api_client)
 
 
         
     def get_upstox_instruments(self, symbols=["NIFTY", "BANKNIFTY"], spot_prices={"NIFTY": 0, "BANKNIFTY": 0}):
+        """
+        Fetches the complete list of futures and options for the given symbols,
+        filtered to the nearest expiry and a range of strikes around the ATM.
+
+        It uses a local cache (`nse_instruments.json`) to avoid re-downloading
+        the entire instrument master file on every run.
+
+        Args:
+            symbols (list): A list of underlying symbols (e.g., ["NIFTY", "BANKNIFTY"]).
+            spot_prices (dict): A dictionary mapping symbols to their current spot prices.
+
+        Returns:
+            dict: A nested dictionary containing the instrument keys for futures and
+                  a list of relevant option strikes for each symbol.
+        """
         instrument_file = 'nse_instruments.json'
 
-        # 1. Load Instrument Master (from local cache or download with cache invalidation)
-
+        # Load Instrument Master from local cache or download if it's stale (older than 24h).
         should_download = True
         if os.path.exists(instrument_file):
             # Check if the file is more than 24 hours old
@@ -126,32 +145,35 @@ class DataHandler:
 
     def getNiftyAndBNFnOKeys(self, apiclient):
         """
-        Retrieves the instrument keys for Nifty and Bank Nifty futures and options.
-        This is a placeholder for a more dynamic instrument discovery mechanism.
+        Dynamically discovers and returns a list of relevant instrument keys to track.
+
+        This function performs a series of API calls and lookups to build a
+        comprehensive list of instruments for the trading session, including:
+        1. The main indices (Nifty 50, Nifty Bank).
+        2. The nearest-month futures for these indices.
+        3. A strip of 7 At-The-Money (ATM) options for the nearest expiry.
+
+        Args:
+            apiclient: An authenticated Upstox API client instance.
+
+        Returns:
+            list: A list of instrument key strings to be used for data fetching
+                  and strategy execution.
         """
-        # This should be a dynamic lookup in a real system.
-        # For now, we'll subscribe to the main indices.
-
-
-        
-        ALL_FNO=[] 
+        ALL_FNO = []
         apiInstance = upstox_client.MarketQuoteV3Api(apiclient)
         try:
-            # For a single instrument
+            # 1. Get the latest spot prices for the main indices.
             response = apiInstance.get_ltp(instrument_key="NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank")
-            # print(response.data.get("NSE_INDEX|Nifty 50").get("last_price"))
-            # If you want to access a specific index's last price:
             nifty_bank_data = response.data['NSE_INDEX:Nifty Bank']
-            nifty_bank_last_price = nifty_bank_data.last_price  # Use dot notation here
-            
+            nifty_bank_last_price = nifty_bank_data.last_price
             nifty_50_data = response.data['NSE_INDEX:Nifty 50']
-            nifty_50_last_price = nifty_50_data.last_price    # Use dot notation here
+            nifty_50_last_price = nifty_50_data.last_price
 
             print(f"Nifty Bank last price: {nifty_bank_last_price}")
             print(f"Nifty 50 last price: {nifty_50_last_price}")
             
-            # --- Execution ---
-            # Replace spot prices with actual live LTP before running
+            # 2. Use spot prices to find relevant F&O instruments.
             current_spots = {
                 "NIFTY": nifty_50_last_price,
                 "BANKNIFTY": nifty_bank_last_price
@@ -159,15 +181,20 @@ class DataHandler:
 
             self.instrument_mapping = self.get_upstox_instruments(["NIFTY", "BANKNIFTY"], current_spots)
             
+            # 3. Cache the nearest expiry dates for later use in option chain lookups.
             self.expiry_dates['NIFTY'] = self.instrument_mapping['NIFTY']['expiry']
             self.expiry_dates['BANKNIFTY'] = self.instrument_mapping['BANKNIFTY']['expiry']
 
-            ALL_FNO.extend(self.instrument_mapping['NIFTY']['all_keys'])
-            ALL_FNO.extend(self.instrument_mapping['BANKNIFTY']['all_keys'])
+            # 4. Compile the final list of all instrument keys and build the inverted map for fast lookups.
+            for symbol, mapping in self.instrument_mapping.items():
+                for key in mapping.get('all_keys', []):
+                    self.instrument_to_symbol_map[key] = symbol
+                ALL_FNO.extend(mapping['all_keys'])
 
             return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"] + ALL_FNO
         except ApiException as e:
             logging.error(f"Exception when calling MarketQuoteV3Api->get_ltp: {e}")
+            # Fallback to just the main indices if F&O discovery fails.
             return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"]
 
     def get_historical_candle_data(self, instrument_key:str, interval_unit:str, interval_value:str, to_date:str, from_date:str):
@@ -188,7 +215,13 @@ class DataHandler:
                 )
                 logging.info(f"Fetched equity historical data for {instrument_key}")
             else:
-                api_response = history_api.get_historical_candle_data1(instrument_key, "minutes", "1", "2026-01-02", "2026-01-01" )
+                api_response = history_api.get_historical_candle_data1(
+                    instrument_key=instrument_key,
+                    unit=interval_unit,
+                    interval=interval_value,
+                    to_date=to_date,
+                    from_date=from_date
+                )
                 logging.info(f"Fetched F&O historical data for {instrument_key}")
 
             return api_response.data.candles
