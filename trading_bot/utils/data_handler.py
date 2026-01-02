@@ -1,4 +1,5 @@
 import logging
+import time
 import upstox_client
 from upstox_client.rest import ApiException
 from datetime import datetime
@@ -188,16 +189,28 @@ class DataHandler:
         """
         try:
             options_api = upstox_client.OptionsApi(self.api_client)
-            api_response = options_api.get_pc_option_chain(instrument_key, expiry_date)
+            api_response = options_api.get_put_call_option_chain(instrument_key, expiry_date)
             return api_response.data
         except ApiException as e:
-            logging.error(f"Exception when calling OptionsApi->get_pc_option_chain: {e}")
+            logging.error(f"Exception when calling OptionsApi->get_put_call_option_chain: {e}")
             return []
 
     def on_auto_reconnect_stopped(self, data):
         """Handler for when auto-reconnect retries are exhausted."""
         print(f" {datetime.now()} == Auto-reconnect stopped after retries: {data}")
         # Consider manual intervention or a higher-level retry here
+
+    def _on_open(self, *args, **kwargs):
+        """Callback for when the websocket connection is opened."""
+        logging.info("Websocket connection opened.")
+
+    def _on_close(self, *args, **kwargs):
+        """Callback for when the websocket connection is closed."""
+        logging.info(f"Websocket connection closed.")
+
+    def _on_error(self, *args, **kwargs):
+        """Callback for websocket errors."""
+        logging.error(f"Websocket error: {args}")
 
     def start_market_data_stream(self, instrument_keys, on_message, on_open=None, on_close=None, on_error=None):
         """
@@ -215,9 +228,9 @@ class DataHandler:
             
             # Register Callbacks
             self.market_data_streamer.on("message", on_message)
-            self.market_data_streamer.on("open", on_open if on_open else lambda *args, **kwargs: None)
-            self.market_data_streamer.on("error", on_error if on_error else lambda *args, **kwargs: None)
-            self.market_data_streamer.on("close", on_close if on_close else lambda *args, **kwargs: None)
+            self.market_data_streamer.on("open", on_open if on_open else self._on_open)
+            self.market_data_streamer.on("error", on_error if on_error else self._on_error)
+            self.market_data_streamer.on("close", on_close if on_close else self._on_close)
             
             self.market_data_streamer.on("autoReconnectStopped", self.on_auto_reconnect_stopped)
             
@@ -228,6 +241,7 @@ class DataHandler:
 
             self.market_data_streamer.auto_reconnect(ENABLE_AUTO_RECONNECT, INTERVAL_SECONDS, MAX_RETRIES)
 
+            time.sleep(1)
             self.market_data_streamer.connect()
             logging.info("Market data stream started.")
         except ApiException as e:
