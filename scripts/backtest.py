@@ -64,24 +64,8 @@ class Backtester:
 
         tick_count = 0
         for tick in ticks_cursor:
-            # Format the tick data into the structure expected by _on_message
-            formatted_message = {
-                'feeds': {
-                    tick['instrument_key']: {
-                        'fullFeed': {
-                            'marketFF': {
-                                'ltpc': {
-                                    'ltp': tick['price'],
-                                    'ltq': tick['volume']
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            # 4. Simulate the WebSocket message
-            self.trading_bot._on_message(formatted_message)
+            # 4. Simulate the WebSocket message by passing the raw tick data
+            self.trading_bot._on_message(tick)
             tick_count += 1
 
         print(f"Processed {tick_count} ticks.")
