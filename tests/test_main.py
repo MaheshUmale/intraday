@@ -2,7 +2,6 @@ import unittest
 from unittest.mock import patch, MagicMock
 from trading_bot.main import TradingBot
 import pandas as pd
-import pandas_ta as ta
 from trading_bot.strategy.strategy import DayType
 import trading_bot.config as config
 
@@ -16,7 +15,20 @@ class TestTradingBot(unittest.TestCase):
 
     def test_on_message_candle_aggregation_new(self):
         # Arrange
-        message = {'instrument_key': 'TEST_KEY', 'last_price': 100, 'volume': 1000}
+        message = {
+            'feeds': {
+                'TEST_KEY': {
+                    'ff': {
+                        'marketFF': {
+                            'ltpc': {
+                                'ltp': 100,
+                                'vtt': 1000
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         # Act
         self.bot._on_message(message)
@@ -27,10 +39,38 @@ class TestTradingBot(unittest.TestCase):
 
     def test_on_message_candle_aggregation_update(self):
         # Arrange
-        self.bot._on_message({'instrument_key': 'TEST_KEY', 'last_price': 100, 'volume': 1000})
+        initial_message = {
+            'feeds': {
+                'TEST_KEY': {
+                    'ff': {
+                        'marketFF': {
+                            'ltpc': {
+                                'ltp': 100,
+                                'vtt': 1000
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        update_message = {
+            'feeds': {
+                'TEST_KEY': {
+                    'ff': {
+                        'marketFF': {
+                            'ltpc': {
+                                'ltp': 105,
+                                'vtt': 1500
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.bot._on_message(initial_message)
 
         # Act
-        self.bot._on_message({'instrument_key': 'TEST_KEY', 'last_price': 105, 'volume': 1500})
+        self.bot._on_message(update_message)
 
         # Assert
         candle = self.bot.one_minute_candles['TEST_KEY']
@@ -44,7 +84,7 @@ class TestTradingBot(unittest.TestCase):
     @patch('pandas_ta.vwma')
     def test_execute_strategy(self, mock_vwma, mock_calc_score, mock_calc_pcr, mock_classify_day):
         # Arrange
-        config.USE_ADVANCED_VOLUME_ANALYSIS = False # Disable VPA for this test
+        config.USE_ADVANCED_VOLUME_ANALYSIS = False
         self.bot.hunter_zone['TEST_KEY'] = {'high': 100, 'low': 90}
         df = pd.DataFrame({'open': [95], 'close': [98], 'high': [99], 'low': [94], 'volume': [1000], 'timestamp': [pd.Timestamp.now()]})
         mock_classify_day.return_value = DayType.BEARISH_TREND
@@ -57,7 +97,7 @@ class TestTradingBot(unittest.TestCase):
 
         # Assert
         self.bot.strategies[DayType.BEARISH_TREND].execute.assert_called_once()
-        config.USE_ADVANCED_VOLUME_ANALYSIS = True # Reset config
+        config.USE_ADVANCED_VOLUME_ANALYSIS = True
 
 
 if __name__ == '__main__':
