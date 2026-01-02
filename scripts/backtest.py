@@ -41,6 +41,10 @@ class Backtester:
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
         end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
 
+        # Convert dates to millisecond timestamp strings for the query
+        start_ts_ms = int(start_date.timestamp() * 1000)
+        end_ts_ms = int(end_date.timestamp() * 1000)
+
         print("--- Starting Backtest ---")
         print(f"Date Range: {start_date_str} to {end_date_str}")
 
@@ -52,36 +56,28 @@ class Backtester:
         # In a real scenario, this would be calculated based on the previous day's data
         self.trading_bot.calculate_hunter_zone(start_date)
 
-        # 3. Fetch historical data from MongoDB
+        # 3. Fetch historical data from MongoDB using the correct timestamp field
+        # Note: The collection name might be different, e.g., 'market_data'
         ticks_cursor = self.db.ticks.find({
-            'timestamp': {
-                '$gte': start_date,
-                '$lt': end_date
+            'currentTs': {
+                '$gte': str(start_ts_ms),
+                '$lt': str(end_ts_ms)
             }
-        }).sort('timestamp', 1)
+        }).sort('currentTs', 1)
 
-        print("Fetching and processing historical tick data...")
+        print("Fetching and processing historical market data feeds...")
 
         tick_count = 0
-        for tick in ticks_cursor:
-            # Format the tick data into the structure expected by _on_message
-            formatted_message = {
-                'feeds': {
-                    tick['instrument_key']: {
-                        'fullFeed': {
-                            'marketFF': {
-                                'ltpc': {
-                                    'ltp': tick['price'],
-                                    'ltq': tick['volume']
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        for doc in ticks_cursor:
+            # The document itself is the message
+            message = doc
 
-            # 4. Simulate the WebSocket message
-            self.trading_bot._on_message(formatted_message)
+            # Extract and convert the timestamp from the document
+            ts_ms = int(doc['currentTs'])
+            tick_timestamp = datetime.fromtimestamp(ts_ms / 1000.0)
+
+            # 4. Simulate the WebSocket message, passing the full message and historical timestamp
+            self.trading_bot._on_message(message, tick_timestamp)
             tick_count += 1
 
         print(f"Processed {tick_count} ticks.")

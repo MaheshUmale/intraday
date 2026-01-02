@@ -3,6 +3,7 @@ import trading_bot.config as config
 import upstox_client
 from upstox_client.rest import ApiException
 import uuid
+from datetime import datetime
 
 class OrderManager:
     """
@@ -14,19 +15,22 @@ class OrderManager:
         """
         self.api_client = api_client
         self.paper_positions = {}
+        self.paper_trades = [] # To store closed trades for analysis
 
-    def place_order(self, quantity, product, validity, price, instrument_token, order_type, transaction_type, tag=None):
+    def place_order(self, quantity, product, validity, price, instrument_token, order_type, transaction_type, tag=None, timestamp=None):
         """
         Places an order.
         """
         if config.PAPER_TRADING:
             order_id = str(uuid.uuid4())
+            entry_time = timestamp if timestamp else datetime.now()
             logging.info(f"PAPER TRADING: Placing {transaction_type} {order_type} order for {instrument_token}.")
             self.paper_positions[instrument_token] = {
                 'order_id': order_id,
                 'instrument_key': instrument_token,
                 'transaction_type': transaction_type,
                 'entry_price': price, # In a real scenario, this would be the fill price
+                'entry_time': entry_time,
                 'stop_loss_price': 0, # To be updated later
                 'direction': 'BULL' if transaction_type == 'BUY' else 'BEAR'
             }
@@ -140,10 +144,36 @@ class OrderManager:
         """
         return self.paper_positions
 
-    def close_paper_position(self, instrument_key):
+    def close_paper_position(self, instrument_key, exit_price, exit_time):
         """
-        Removes a position from the paper trading portfolio.
+        Closes a paper position and records the trade.
         """
         if instrument_key in self.paper_positions:
+            position = self.paper_positions[instrument_key]
+
+            # Calculate PnL
+            if position['direction'] == 'BULL': # Long position
+                pnl = exit_price - position['entry_price']
+            else: # Short position
+                pnl = position['entry_price'] - exit_price
+
+            # Create a trade record
+            trade = {
+                'instrument_key': position['instrument_key'],
+                'entry_price': position['entry_price'],
+                'exit_price': exit_price,
+                'pnl': pnl,
+                'entry_time': position['entry_time'],
+                'exit_time': exit_time,
+                'direction': position['direction']
+            }
+            self.paper_trades.append(trade)
+
+            logging.info(f"Paper position closed for {instrument_key}. PnL: {pnl:.2f}")
             del self.paper_positions[instrument_key]
-            logging.info(f"Paper position closed for {instrument_key}")
+
+    def get_all_paper_trades(self):
+        """
+        Returns all closed paper trades.
+        """
+        return self.paper_trades

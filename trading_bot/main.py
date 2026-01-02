@@ -51,9 +51,11 @@ class TradingBot:
         self.one_minute_candles = {}
         self.last_known_volume = {}
 
-    def _on_message(self, message):
+    def _on_message(self, message, timestamp=None):
         """
         Callback function to handle incoming market data.
+        If timestamp is provided, it's used for backtesting.
+        Otherwise, the current time is used.
         """
         data = None
         if isinstance(message, dict):
@@ -80,12 +82,13 @@ class TradingBot:
                     # logging.info(f"Received data for {instrument_key}: Price={price}, Volume Change={volume_change}")
 
                     # Live Stop-Loss Monitoring
+                    # Use the provided timestamp, or default to the current time for live trading
+                    current_time = timestamp if timestamp else datetime.now()
                     if instrument_key in self.open_positions:
-                        self.monitor_stop_loss(instrument_key, self.open_positions[instrument_key], price)
+                        self.monitor_stop_loss(instrument_key, self.open_positions[instrument_key], price, current_time)
 
                     # Candle Aggregation
-                    now = datetime.now()
-                    current_minute = now.replace(second=0, microsecond=0)
+                    current_minute = current_time.replace(second=0, microsecond=0)
 
                     if instrument_key not in self.one_minute_candles:
                         self.one_minute_candles[instrument_key] = {
@@ -99,7 +102,8 @@ class TradingBot:
                     else:
                         candle = self.one_minute_candles[instrument_key]
                         if current_minute > candle['timestamp']:
-                            self.execute_strategy(instrument_key, pd.DataFrame([candle]))
+                            # Pass the timestamp of the completed candle to the strategy
+                            self.execute_strategy(instrument_key, pd.DataFrame([candle]), candle['timestamp'])
                             self.one_minute_candles[instrument_key] = {
                                 'timestamp': current_minute,
                                 'open': price,
@@ -170,7 +174,8 @@ class TradingBot:
                         # Dynamically update config.INSTRUMENTS with the fetched keys
                         self.config.INSTRUMENTS.clear()
                         self.config.INSTRUMENTS.extend(instrument_keys)
-                        self.data_handler.start_market_data_stream(instrument_keys, on_message=self._on_message)
+                         # For live trading, timestamp is None
+                        self.data_handler.start_market_data_stream(instrument_keys, on_message=lambda msg: self._on_message(msg, None))
                         self.calculate_hunter_zone(now)
                 else:
                     if self.data_handler.market_data_streamer:
@@ -198,7 +203,7 @@ class TradingBot:
         """
         return dt_time(9, 15) <= now.time() <= dt_time(15, 30)
 
-    def monitor_stop_loss(self, instrument_key, position, current_price):
+    def monitor_stop_loss(self, instrument_key, position, current_price, timestamp):
         """
         Monitors the stop-loss for a given position.
         """
@@ -207,12 +212,19 @@ class TradingBot:
            (position['direction'] == 'BEAR' and current_price >= stop_loss_price):
             logging.info(f"Stop-loss triggered for {instrument_key} at {current_price}. Closing position.")
             trade_logger.info(f"EXIT: Stop-loss, {instrument_key}, {position['transaction_type']}, {current_price}")
+            # The real exit order
             self.order_manager.place_order(
                 quantity=1, product="I", validity="DAY", price=0,
                 instrument_token=position['instrument_key'], order_type="MARKET",
-                transaction_type="SELL", tag="stop_loss_exit"
+                transaction_type="SELL", tag="stop_loss_exit",
+                timestamp=timestamp
             )
-            self.order_manager.close_paper_position(position['instrument_key'])
+            # Close the paper position with exit details
+            self.order_manager.close_paper_position(
+                instrument_key=position['instrument_key'],
+                exit_price=current_price,
+                exit_time=timestamp
+            )
             del self.open_positions[instrument_key]
 
     def calculate_hunter_zone(self, current_datetime):
@@ -263,7 +275,7 @@ class TradingBot:
             except Exception as e:
                 logging.error(f"Failed to calculate Hunter Zone for {instrument_key}: {e}", exc_info=True)
 
-    def execute_strategy(self, instrument_key, df):
+    def execute_strategy(self, instrument_key, df, timestamp):
         """
         Executes the trading strategy for a given instrument.
         """
@@ -317,7 +329,8 @@ class TradingBot:
                 score=score, price=price, vpa_signal=vpa_signal,
                 instrument_key=instrument_key, hunter_zone=hunter_zone, pcr=pcr,
                 day_type=day_type, option_chain=option_chain, open_positions=self.open_positions,
-                evwma_1m=evwma_1m, evwma_5m=evwma_5m, df=df
+                evwma_1m=evwma_1m, evwma_5m=evwma_5m, df=df,
+                timestamp=timestamp # Pass timestamp to strategy
             )
     
     def shutdown(self):
