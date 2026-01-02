@@ -95,6 +95,7 @@ class HunterTrade(TacticalTemplate):
 
             # Place a market order
             vpa_signal = kwargs.get('vpa_signal')
+            timestamp = kwargs.get('timestamp')
             logging.info(f"Placing Hunter trade for {instrument_key}. Score: {score}, Probability: {probability_score}, VPA: {vpa_signal}")
             trade_logger.info(f"ENTRY: Hunter, {instrument_key}, {direction}, {price}, {score}, {probability_score}, {vpa_signal}")
             order_response = self.order_manager.place_order(
@@ -105,7 +106,8 @@ class HunterTrade(TacticalTemplate):
                 instrument_token=option_instrument_key,
                 order_type="MARKET",
                 transaction_type=transaction_type,
-                tag="hunter_trade"
+                tag="hunter_trade",
+                timestamp=timestamp
             )
 
             if order_response:
@@ -149,6 +151,7 @@ class P2PTrend(TacticalTemplate):
                (score < 0 and position['direction'] == "BULL"):
                 logging.info(f"Score flipped for {instrument_key}. Closing position.")
                 trade_logger.info(f"EXIT: P2P Trend, {instrument_key}, {position['direction']}, {price}, {score}")
+                timestamp = kwargs.get('timestamp')
                 self.order_manager.place_order(
                     quantity=1,
                     product="I",
@@ -157,9 +160,14 @@ class P2PTrend(TacticalTemplate):
                     instrument_token=position['instrument_key'],
                     order_type="MARKET",
                     transaction_type="SELL",
-                    tag="p2p_trend_exit"
+                    tag="p2p_trend_exit",
+                    timestamp=timestamp
                 )
-                self.order_manager.close_paper_position(position['instrument_key'])
+                self.order_manager.close_paper_position(
+                    instrument_key=position['instrument_key'],
+                    exit_price=price,
+                    exit_time=timestamp
+                )
                 if instrument_key in open_positions:
                     del open_positions[instrument_key]
         elif abs(score) >= config.SCORE_THRESHOLD:
@@ -186,6 +194,7 @@ class P2PTrend(TacticalTemplate):
                 return
 
             vpa_signal = kwargs.get('vpa_signal')
+            timestamp = kwargs.get('timestamp')
             logging.info(f"Placing P2P Trend trade for {instrument_key}. Score: {score}, VPA: {vpa_signal}")
             trade_logger.info(f"ENTRY: P2P Trend, {instrument_key}, {direction}, {price}, {score}, {vpa_signal}")
             order_response = self.order_manager.place_order(
@@ -196,7 +205,8 @@ class P2PTrend(TacticalTemplate):
                 instrument_token=option_instrument_key,
                 order_type="MARKET",
                 transaction_type=transaction_type,
-                tag="p2p_trend"
+                tag="p2p_trend",
+                timestamp=timestamp
             )
 
             if order_response:
@@ -248,6 +258,7 @@ class MeanReversion(TacticalTemplate):
                (position['direction'] == "BEAR" and price <= evwma_1m):
                 logging.info(f"Price reverted for {instrument_key}. Closing position.")
                 trade_logger.info(f"EXIT: Mean Reversion, {instrument_key}, {position['direction']}, {price}")
+                timestamp = kwargs.get('timestamp')
                 self.order_manager.place_order(
                     quantity=1,
                     product="I",
@@ -256,9 +267,14 @@ class MeanReversion(TacticalTemplate):
                     instrument_token=position['instrument_key'],
                     order_type="MARKET",
                     transaction_type="SELL",
-                    tag="mean_reversion_exit"
+                    tag="mean_reversion_exit",
+                    timestamp=timestamp
                 )
-                self.order_manager.close_paper_position(position['instrument_key'])
+                self.order_manager.close_paper_position(
+                    instrument_key=position['instrument_key'],
+                    exit_price=price,
+                    exit_time=timestamp
+                )
                 if instrument_key in open_positions:
                     del open_positions[instrument_key]
         else:
@@ -290,6 +306,7 @@ class MeanReversion(TacticalTemplate):
                     return
 
                 vpa_signal = kwargs.get('vpa_signal')
+                timestamp = kwargs.get('timestamp')
                 logging.info(f"Placing Mean Reversion trade for {instrument_key}. Price: {price}, EVWMA_5m: {evwma_5m}, VPA: {vpa_signal}")
                 trade_logger.info(f"ENTRY: Mean Reversion, {instrument_key}, {direction}, {price}, EVWMA_5m: {evwma_5m}, {vpa_signal}")
                 order_response = self.order_manager.place_order(
@@ -300,7 +317,8 @@ class MeanReversion(TacticalTemplate):
                     instrument_token=option_instrument_key,
                     order_type="MARKET",
                     transaction_type=transaction_type,
-                    tag="mean_reversion"
+                    tag="mean_reversion",
+                    timestamp=timestamp
                 )
 
                 if order_response:
