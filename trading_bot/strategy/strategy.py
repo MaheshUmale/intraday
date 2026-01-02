@@ -250,6 +250,10 @@ class MeanReversion(TacticalTemplate):
         evwma_5m = kwargs.get('evwma_5m')
         open_positions = kwargs.get('open_positions')
 
+        if pd.isna(evwma_1m) or pd.isna(evwma_5m):
+            logging.warning(f"EVWMA values are not available for {instrument_key}. Skipping MeanReversion strategy.")
+            return
+
         if instrument_key in open_positions:
             position = open_positions[instrument_key]
             # Close the position if the price has reverted to the mean
