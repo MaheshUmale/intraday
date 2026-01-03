@@ -13,25 +13,39 @@ import trading_bot.config as config
 
 class Backtester:
     """
-    Class to run a backtest of the trading strategy using historical data from the Upstox API.
+    Runs a historical backtest of the trading strategy.
+
+    This class simulates the live trading environment by iterating through historical
+    candle data chronologically, feeding it to the trading bot, and tracking the
+    resulting paper trades.
     """
 
     def __init__(self):
         """
-        Initializes the Backtester.
+        Initializes the Backtester, ensuring paper trading is enabled.
         """
-        # Create a copy of the default config to override for the backtest
         backtest_config = config
-        backtest_config.PAPER_TRADING = True
+        backtest_config.PAPER_TRADING = True  # Force paper trading mode for safety
         self.trading_bot = TradingBot(config_override=backtest_config)
         print("Forcing PAPER_TRADING mode for backtest.")
 
     def run_backtest(self, from_date_str, to_date_str):
         """
-        Runs the backtest for a given date range.
+        Executes the backtest over a specified date range.
+
+        The process involves:
+        1. Initializing the bot and its modules.
+        2. Fetching all relevant F&O instruments.
+        3. Calculating the initial Hunter Zone.
+        4. Fetching all 1-minute candles for the period.
+        5. Iterating through each candle chronologically to simulate a live feed.
+        6. Caching option chain data to avoid API rate limiting.
+        7. Executing the strategy for each candle.
+        8. Analyzing and printing the results.
+
         Args:
-            from_date_str (str): The start date for the backtest in 'YYYY-MM-DD' format.
-            to_date_str (str): The end date for the backtest in 'YYYY-MM-DD' format.
+            from_date_str (str): The start date for the backtest (e.g., '2023-01-01').
+            to_date_str (str): The end date for the backtest (e.g., '2023-01-03').
         """
         print("--- Starting Backtest ---")
         print(f"Date Range: {from_date_str} to {to_date_str}")
@@ -40,37 +54,123 @@ class Backtester:
         self.trading_bot._authenticate()
         self.trading_bot._initialize_modules()
 
-        # 2. Set the Hunter Zone for the start of the day
+        # 2. Dynamically get all instruments first
+        print("Fetching full list of F&O instruments...")
+        instrument_keys = self.trading_bot.data_handler.getNiftyAndBNFnOKeys(self.trading_bot.api_client)
+        self.trading_bot.config.INSTRUMENTS.clear()
+        self.trading_bot.config.INSTRUMENTS.extend(instrument_keys)
+        print(f"Now tracking {len(instrument_keys)} instruments.")
+
+        # 3. Set the Hunter Zone for all instruments
         start_date = datetime.strptime(from_date_str, '%Y-%m-%d')
         self.trading_bot.calculate_hunter_zone(start_date)
 
-        # 3. Fetch all historical 1-minute candles for the date range
+        # 4. Fetch all historical 1-minute candles for the date range
         all_candles = []
+        print(f"Fetching historical candle data for all instruments...")
         for instrument_key in self.trading_bot.config.INSTRUMENTS:
-            candles = self.trading_bot.data_handler.get_historical_candle_data(
-                instrument_key, '1', 'minutes', to_date_str, from_date_str
-            )
-            if candles:
-                all_candles.extend([(instrument_key, candle) for candle in candles])
+            try:
+                # Corrected argument order: unit, then interval
+                candles = self.trading_bot.data_handler.get_historical_candle_data(
+                    instrument_key, 'minutes', '1', to_date_str, from_date_str
+                )
+                if candles:
+                    all_candles.extend([(instrument_key, candle) for candle in candles])
+            except Exception as e:
+                print(f"Could not fetch data for {instrument_key}: {e}")
 
-        for candle in candles[:3]:
-            print(candle)
 
-        # Sort all candles by timestamp chronologically
-        all_candles.sort(key=lambda x: x[0])
+        if not all_candles:
+            print("No candle data fetched for the given date range. Exiting backtest.")
+            return
+
+        # Sort all candles by timestamp chronologically. The candle is a list, so we access by index.
+        all_candles.sort(key=lambda x: x[1][0])
 
         print(f"Fetched {len(all_candles)} total candles for backtesting.")
 
-        # 4. Iterate through each candle and execute the strategy
-        for instrument_key, candle in all_candles:
-            candle_timestamp = datetime.fromisoformat(candle[0])
+        # 4. Iterate through each candle, simulating the passage of time
+        instrument_dfs = {}  # Dictionary to store accumulating dataframes for each instrument
+        option_chain_cache = {} # Cache to avoid excessive API calls
+        candle_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi']
 
-            # Create a DataFrame for the single candle
-            df = pd.DataFrame([candle], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        for instrument_key, candle_list in all_candles:
+            candle_timestamp = datetime.fromisoformat(candle_list[0])
 
-            # Execute the strategy for this candle
-            self.trading_bot.execute_strategy(instrument_key, df, candle_timestamp)
+            # Ignore data outside of market hours for a more realistic simulation
+            if not dt_time(9, 15) <= candle_timestamp.time() <= dt_time(15, 30):
+                continue
+
+            # Create a dictionary from the list to handle data correctly
+            candle_dict = dict(zip(candle_columns, candle_list))
+
+            # Update volume cache, mimicking live behavior
+            self.trading_bot.latest_volume_cache[instrument_key] = candle_dict.get('volume', 0)
+
+            # Get or create the DataFrame for the current instrument
+            if instrument_key not in instrument_dfs:
+                instrument_dfs[instrument_key] = pd.DataFrame(columns=candle_columns).astype({
+                    'open': 'float64', 'high': 'float64', 'low': 'float64', 'close': 'float64',
+                    'volume': 'int64', 'oi': 'int64'
+                })
+                instrument_dfs[instrument_key]['timestamp'] = pd.to_datetime(instrument_dfs[instrument_key]['timestamp'])
+
+            # Append the new candle data
+            new_candle_df = pd.DataFrame([candle_dict])
+            instrument_dfs[instrument_key] = pd.concat([instrument_dfs[instrument_key], new_candle_df], ignore_index=True)
+
+            # Ensure timestamp column is in the correct format after concat
+            instrument_dfs[instrument_key]['timestamp'] = pd.to_datetime(instrument_dfs[instrument_key]['timestamp'])
+
+            # --- Option Chain Caching ---
+            # Generate a cache key for the current minute
+            cache_key = candle_timestamp.strftime('%Y-%m-%d %H:%M')
+
+            # Fetch and cache the option chain for both Nifty and Bank Nifty if not already in cache for this minute
+            if cache_key not in option_chain_cache:
+                option_chain_cache[cache_key] = {}
+                try:
+                    nifty_expiry = self.trading_bot.data_handler.expiry_dates.get('NIFTY')
+                    if nifty_expiry:
+                        option_chain_cache[cache_key]['NIFTY'] = self.trading_bot.data_handler.get_option_chain(
+                            "NSE_INDEX|Nifty 50", nifty_expiry
+                        )
+                except Exception as e:
+                    print(f"Error fetching NIFTY option chain for {cache_key}: {e}")
+
+                try:
+                    bn_expiry = self.trading_bot.data_handler.expiry_dates.get('BANKNIFTY')
+                    if bn_expiry:
+                        option_chain_cache[cache_key]['BANKNIFTY'] = self.trading_bot.data_handler.get_option_chain(
+                            "NSE_INDEX|Nifty Bank", bn_expiry
+                        )
+                except Exception as e:
+                    print(f"Error fetching BANKNIFTY option chain for {cache_key}: {e}")
+
+
+            # --- Pass Cached Data to Strategy ---
+            # Determine which option chain to use based on the instrument
+            symbol = None
+            if instrument_key.startswith('NSE_FO'):
+                for sym, mapping in self.trading_bot.data_handler.instrument_mapping.items():
+                    if instrument_key in mapping.get('all_keys', []):
+                        symbol = sym
+                        break
+            elif 'NIFTY' in instrument_key or 'Nifty 50' in instrument_key:
+                symbol = 'NIFTY'
+            elif 'BANKNIFTY' in instrument_key or 'Nifty Bank' in instrument_key:
+                symbol = 'BANKNIFTY'
+
+            # Get the correct option chain from the cache for the current minute
+            current_option_chain = option_chain_cache.get(cache_key, {}).get(symbol)
+
+            # Execute the strategy with the cumulative DataFrame and the cached option chain
+            self.trading_bot.execute_strategy(
+                instrument_key,
+                instrument_dfs[instrument_key].copy(),
+                candle_timestamp,
+                option_chain=current_option_chain # Pass cached data
+            )
 
         print("--- Backtest Complete ---")
 

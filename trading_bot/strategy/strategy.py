@@ -8,6 +8,10 @@ import pandas_ta as ta
 trade_logger = logging.getLogger('trade_logger')
 
 class DayType(Enum):
+    """
+    Enum representing the classification of the market day type.
+    This classification determines which trading strategy (Tactical Template) to use.
+    """
     BULLISH_TREND = "Bullish Trend"
     BEARISH_TREND = "Bearish Trend"
     SIDEWAYS_BULL_TRAP = "Sideways Bull Trap"
@@ -16,7 +20,17 @@ class DayType(Enum):
 
 def classify_day_type(opening_price, hunter_zone_high, hunter_zone_low, pcr):
     """
-    Classifies the day type based on the opening price, hunter zone, and PCR.
+    Classifies the day type based on the opening price relative to the Hunter Zone
+    and the Put-Call Ratio (PCR).
+
+    Args:
+        opening_price (float): The opening price of the instrument for the day.
+        hunter_zone_high (float): The high of the Hunter Zone.
+        hunter_zone_low (float): The low of the Hunter Zone.
+        pcr (float): The current Put-Call Ratio.
+
+    Returns:
+        DayType: The classified day type.
     """
     if opening_price > hunter_zone_high and pcr > 1.2:
         return DayType.BULLISH_TREND
@@ -30,24 +44,62 @@ def classify_day_type(opening_price, hunter_zone_high, hunter_zone_low, pcr):
         return DayType.SIDEWAYS_CHOPPY
 
 class TacticalTemplate:
+    """
+    Base class for all trading strategies (Tactical Templates).
+    Defines the common interface for strategy execution.
+    """
     def __init__(self, order_manager):
         self.order_manager = order_manager
 
     def execute(self, **kwargs):
+        """
+        The main execution method for a strategy. This must be implemented by subclasses.
+        """
         raise NotImplementedError
 
 def find_atm_strike(price):
     """
-    Finds the at-the-money (ATM) strike price.
+    Finds the at-the-money (ATM) strike price by rounding to the nearest 50.
     """
-    return int(round(price / 50) * 50) # Round to nearest 50 for indices
+    return int(round(price / 50) * 50)
+
+def get_atm_option_instrument(option_chain, atm_strike, direction):
+    """
+    Finds the instrument key for the ATM call or put option.
+
+    Args:
+        option_chain (list): The list of option chain data from the API.
+        atm_strike (int): The calculated at-the-money strike price.
+        direction (str): The trade direction, 'BULL' for call, 'BEAR' for put.
+
+    Returns:
+        str: The instrument key of the ATM option, or None if not found.
+    """
+    if not option_chain:
+        return None
+
+    for strike_data in option_chain:
+        if strike_data.strike_price == atm_strike:
+            if direction == 'BULL' and strike_data.call_options:
+                return strike_data.call_options.instrument_key
+            elif direction == 'BEAR' and strike_data.put_options:
+                return strike_data.put_options.instrument_key
+    return None
 
 class HunterTrade(TacticalTemplate):
-    # Note: HunterTrade does not have its own exit logic.
-    # Exits are handled by the main application's stop-loss monitoring.
+    """
+    Implements the "Hunter" tactical template.
+    This strategy is typically used in sideways markets to trade breakouts
+    from the Hunter Zone, qualified by microstructure and probability scores.
+    Exit logic is handled externally by the main bot's stop-loss monitoring.
+    """
     def execute(self, **kwargs):
         """
-        Executes the Hunter Trade strategy.
+        Executes the Hunter Trade logic.
+
+        Args:
+            **kwargs: A dictionary of strategy parameters including score, price,
+                      instrument_key, option_chain, open_positions, df, pcr, etc.
         """
         score = kwargs.get('score')
         price = kwargs.get('price')
@@ -76,18 +128,10 @@ class HunterTrade(TacticalTemplate):
             direction = 'BULL' if score > 0 else 'BEAR'
             transaction_type = "BUY"
 
-            # Find the ATM strike and the corresponding instrument key
+            # Find the ATM strike and the corresponding option instrument.
             atm_strike = find_atm_strike(price)
-            option_instrument_key = None
+            option_instrument_key = get_atm_option_instrument(option_chain, atm_strike, direction)
 
-            if option_chain:
-                for strike_data in option_chain:
-                    if strike_data.strike_price == atm_strike:
-                        if direction == 'BULL' and strike_data.call_options:
-                            option_instrument_key = strike_data.call_options.instrument_key
-                        elif direction == 'BEAR' and strike_data.put_options:
-                            option_instrument_key = strike_data.put_options.instrument_key
-                        break
             if not option_instrument_key:
                 logging.warning(f"Could not find ATM option for {instrument_key} at strike {atm_strike}. Skipping trade.")
                 return
@@ -134,9 +178,21 @@ class HunterTrade(TacticalTemplate):
                 }
 
 class P2PTrend(TacticalTemplate):
+    """
+    Implements the Point-to-Point (P2P) Trend tactical template.
+    This strategy is used in trending markets. It enters a position based on a
+    strong microstructure score and holds it until the score flips, indicating
+    a potential reversal.
+    """
     def execute(self, **kwargs):
         """
-        Executes the Point-to-Point Trend strategy.
+        Executes the P2P Trend logic.
+
+        If a position is open, it checks if the score has flipped to exit.
+        If no position is open, it checks for a strong score to enter a new position.
+
+        Args:
+            **kwargs: A dictionary of strategy parameters.
         """
         score = kwargs.get('score')
         price = kwargs.get('price')
@@ -174,19 +230,9 @@ class P2PTrend(TacticalTemplate):
             direction = 'BULL' if score > 0 else 'BEAR'
             transaction_type = "BUY"
 
-            # Find the ATM strike and the corresponding instrument key
+            # Find the ATM strike and the corresponding option instrument.
             atm_strike = find_atm_strike(price)
-            option_instrument_key = None
-
-            option_chain = kwargs.get('option_chain')
-            if option_chain:
-                for strike_data in option_chain:
-                    if strike_data.strike_price == atm_strike:
-                        if direction == 'BULL' and strike_data.call_options:
-                            option_instrument_key = strike_data.call_options.instrument_key
-                        elif direction == 'BEAR' and strike_data.put_options:
-                            option_instrument_key = strike_data.put_options.instrument_key
-                        break
+            option_instrument_key = get_atm_option_instrument(kwargs.get('option_chain'), atm_strike, direction)
 
             if not option_instrument_key:
                 logging.warning(f"Could not find ATM option for {instrument_key} at strike {atm_strike}. Skipping trade.")
@@ -232,6 +278,10 @@ class P2PTrend(TacticalTemplate):
                 }
 
 class Scalp(TacticalTemplate):
+    """
+    Placeholder for the Scalp tactical template.
+    This strategy is not yet implemented.
+    """
     def execute(self, **kwargs):
         """
         Executes the Scalp trading strategy.
@@ -240,15 +290,31 @@ class Scalp(TacticalTemplate):
         logging.info("Scalp strategy is not yet implemented.")
 
 class MeanReversion(TacticalTemplate):
+    """
+    Implements the Mean Reversion tactical template.
+    This strategy is used in choppy/sideways markets. It enters a trade when
+    the price deviates significantly from its short-term mean (EVWMA) and
+    exits when it reverts back to the mean.
+    """
     def execute(self, **kwargs):
         """
-        Executes the Mean Reversion strategy.
+        Executes the Mean Reversion logic.
+
+        If a position is open, it checks for price reversion to exit.
+        If no position is open, it checks for significant price deviation to enter.
+
+        Args:
+            **kwargs: A dictionary of strategy parameters.
         """
         price = kwargs.get('price')
         instrument_key = kwargs.get('instrument_key')
         evwma_1m = kwargs.get('evwma_1m')
         evwma_5m = kwargs.get('evwma_5m')
         open_positions = kwargs.get('open_positions')
+
+        if pd.isna(evwma_1m) or pd.isna(evwma_5m):
+            logging.warning(f"EVWMA values are not available for {instrument_key}. Skipping MeanReversion strategy.")
+            return
 
         if instrument_key in open_positions:
             position = open_positions[instrument_key]
@@ -286,19 +352,10 @@ class MeanReversion(TacticalTemplate):
 
             if direction:
                 transaction_type = "BUY"
-                # Find the ATM strike and the corresponding instrument key
-                atm_strike = find_atm_strike(price)
-                option_instrument_key = None
 
-                option_chain = kwargs.get('option_chain')
-                if option_chain:
-                    for strike_data in option_chain:
-                        if strike_data.strike_price == atm_strike:
-                            if direction == 'BULL' and strike_data.call_options:
-                                option_instrument_key = strike_data.call_options.instrument_key
-                            elif direction == 'BEAR' and strike_data.put_options:
-                                option_instrument_key = strike_data.put_options.instrument_key
-                            break
+                # Find the ATM strike and the corresponding option instrument.
+                atm_strike = find_atm_strike(price)
+                option_instrument_key = get_atm_option_instrument(kwargs.get('option_chain'), atm_strike, direction)
 
                 if not option_instrument_key:
                     logging.warning(f"Could not find ATM option for {instrument_key} at strike {atm_strike}. Skipping trade.")
@@ -367,9 +424,24 @@ def calculate_evwma(df, length=20):
     """
     Calculates the Elastic Volume Weighted Moving Average (EVWMA) and its slope.
     """
-    if df.empty or 'volume' not in df.columns:
+    # Ensure columns exist to prevent KeyErrors
+    if df.empty or 'volume' not in df.columns or 'close' not in df.columns:
+        df['evwma'] = pd.NA
+        df['evwma_slope'] = pd.NA
         return df
-    df['evwma'] = ta.vwma(df['high'], df['low'], df['close'], df['volume'], length=length)
+
+    # Clean data: ensure numeric types and handle missing values
+    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
+    df['close'] = pd.to_numeric(df['close'], errors='coerce').ffill()
+
+    # If not enough data points for the indicator, return with null columns
+    if len(df.dropna(subset=['close', 'volume'])) < length:
+        df['evwma'] = pd.NA
+        df['evwma_slope'] = pd.NA
+        return df
+
+    # Calculate indicators
+    df['evwma'] = ta.vwma(close=df['close'], volume=df['volume'], length=length)
     df['evwma_slope'] = df['evwma'].diff()
     return df
 
