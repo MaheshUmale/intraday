@@ -423,6 +423,7 @@ def calculate_pcr(option_chain):
 def calculate_evwma(df, length=20):
     """
     Calculates the Elastic Volume Weighted Moving Average (EVWMA) and its slope.
+    Dynamically adjusts the lookback period if not enough data is available.
     """
     # Ensure columns exist to prevent KeyErrors
     if df.empty or 'volume' not in df.columns or 'close' not in df.columns:
@@ -434,14 +435,21 @@ def calculate_evwma(df, length=20):
     df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
     df['close'] = pd.to_numeric(df['close'], errors='coerce').ffill()
 
-    # If not enough data points for the indicator, return with null columns
-    if len(df.dropna(subset=['close', 'volume'])) < length:
+    # Determine the number of available data points
+    valid_df = df.dropna(subset=['close', 'volume'])
+    n_points = len(valid_df)
+
+    # If not enough data points for a meaningful calculation, return with null columns
+    if n_points < 2:  # Need at least 2 points to calculate a slope
         df['evwma'] = pd.NA
         df['evwma_slope'] = pd.NA
         return df
 
-    # Calculate indicators
-    df['evwma'] = ta.vwma(close=df['close'], volume=df['volume'], length=length)
+    # Use a shorter length if the number of available points is less than the desired length
+    actual_length = min(n_points, length)
+
+    # Calculate indicators using the adjusted length
+    df['evwma'] = ta.vwma(close=df['close'], volume=df['volume'], length=actual_length)
     df['evwma_slope'] = df['evwma'].diff()
     return df
 

@@ -191,40 +191,48 @@ class DataHandler:
                     self.instrument_to_symbol_map[key] = symbol
                 ALL_FNO.extend(mapping['all_keys'])
 
+            # Manually add the main indices to the map for a truly unified lookup.
+            self.instrument_to_symbol_map["NSE_INDEX|Nifty 50"] = "NIFTY"
+            self.instrument_to_symbol_map["NSE_INDEX|Nifty Bank"] = "BANKNIFTY"
+
             return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"] + ALL_FNO
         except ApiException as e:
-            logging.error(f"Exception when calling MarketQuoteV3Api->get_ltp: {e}")
-            # Fallback to just the main indices if F&O discovery fails.
-            return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"]
+            logging.error(f"Exception when calling MarketQuoteV3Api->get_ltp: {e}. Using fallback spot prices for backtesting.")
+            # Fallback for backtesting: use approximate spot prices if the live API fails.
+            current_spots = {"NIFTY": 22500, "BANKNIFTY": 48000}
+            self.instrument_mapping = self.get_upstox_instruments(["NIFTY", "BANKNIFTY"], current_spots)
+            self.expiry_dates['NIFTY'] = self.instrument_mapping['NIFTY']['expiry']
+            self.expiry_dates['BANKNIFTY'] = self.instrument_mapping['BANKNIFTY']['expiry']
+            for symbol, mapping in self.instrument_mapping.items():
+                for key in mapping.get('all_keys', []):
+                    self.instrument_to_symbol_map[key] = symbol
+                ALL_FNO.extend(mapping['all_keys'])
+            self.instrument_to_symbol_map["NSE_INDEX|Nifty 50"] = "NIFTY"
+            self.instrument_to_symbol_map["NSE_INDEX|Nifty Bank"] = "BANKNIFTY"
+            return ["NSE_INDEX|Nifty 50", "NSE_INDEX|Nifty Bank"] + ALL_FNO
 
-    def get_historical_candle_data(self, instrument_key:str, interval_unit:str, interval_value:str, to_date:str, from_date:str):
+    def get_historical_candle_data(self, instrument_key:str, interval_unit:str, interval_value:str, from_date:str, to_date:str):
         """
         Fetches historical candle data, choosing the correct API endpoint based on the instrument type.
         """
-        print(f"{instrument_key}, {interval_unit}, {interval_value}, {to_date}, {from_date}")
         try:
             history_api = upstox_client.HistoryV3Api(self.api_client)
 
-            if instrument_key.startswith('NSE_EQ'):
-                # The equity history API does not support a 'from_date' range.
-                api_response = history_api.get_historical_candle_data(
-                    instrument_key=instrument_key,
-                    interval=interval_value,
-                    unit=interval_unit,
-                    to_date=to_date
-                )
-                logging.info(f"Fetched equity historical data for {instrument_key}")
-            else:
-                api_response = history_api.get_historical_candle_data1(
-                    instrument_key=instrument_key,
-                    unit=interval_unit,
-                    interval=interval_value,
-                    to_date=to_date,
-                    from_date=from_date
-                )
-                logging.info(f"Fetched F&O historical data for {instrument_key}")
+            # The API uses get_historical_candle_data1 for both indices and F&O with a date range.
+            # get_historical_candle_data is for equities and does not support a 'from_date'.
+            api_response = history_api.get_historical_candle_data1(
+                instrument_key=instrument_key,
+                unit=interval_unit,
+                interval=interval_value,
+                to_date=to_date,
+                from_date=from_date
+            )
+            logging.info(f"Fetched historical data for {instrument_key}")
 
-            return api_response.data.candles
+            if api_response and api_response.status == 'success':
+                return api_response.data.candles
+            else:
+                return []
         except ApiException as e:
             logging.error(f"Exception when calling HistoryV3Api for {instrument_key}: {e}")
             return None
@@ -251,6 +259,7 @@ class DataHandler:
         Fetches the option chain for a given instrument and expiry date.
         """
         try:
+            # Correctly pass the authenticated api_client to the constructor
             options_api = upstox_client.OptionsApi(self.api_client)
             api_response = options_api.get_put_call_option_chain(instrument_key, expiry_date)
             return api_response.data
@@ -319,9 +328,3 @@ class DataHandler:
             self.market_data_streamer.disconnect()
             self.market_data_streamer = None
             logging.info("Market data stream stopped.")
-
-
-
-
-
- 

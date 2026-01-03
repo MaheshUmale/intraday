@@ -70,9 +70,9 @@ class Backtester:
         print(f"Fetching historical candle data for all instruments...")
         for instrument_key in self.trading_bot.config.INSTRUMENTS:
             try:
-                # Corrected argument order: unit, then interval
+                # Corrected argument order: unit, interval, from_date, to_date
                 candles = self.trading_bot.data_handler.get_historical_candle_data(
-                    instrument_key, 'minutes', '1', to_date_str, from_date_str
+                    instrument_key, 'minutes', '1', from_date_str, to_date_str
                 )
                 if candles:
                     all_candles.extend([(instrument_key, candle) for candle in candles])
@@ -149,19 +149,10 @@ class Backtester:
 
 
             # --- Pass Cached Data to Strategy ---
-            # Determine which option chain to use based on the instrument
-            symbol = None
-            if instrument_key.startswith('NSE_FO'):
-                for sym, mapping in self.trading_bot.data_handler.instrument_mapping.items():
-                    if instrument_key in mapping.get('all_keys', []):
-                        symbol = sym
-                        break
-            elif 'NIFTY' in instrument_key or 'Nifty 50' in instrument_key:
-                symbol = 'NIFTY'
-            elif 'BANKNIFTY' in instrument_key or 'Nifty Bank' in instrument_key:
-                symbol = 'BANKNIFTY'
+            # Use the centralized method to get the symbol for the instrument.
+            symbol = self.trading_bot.get_symbol_from_instrument_key(instrument_key)
 
-            # Get the correct option chain from the cache for the current minute
+            # Get the correct option chain from the cache for the current minute.
             current_option_chain = option_chain_cache.get(cache_key, {}).get(symbol)
 
             # Execute the strategy with the cumulative DataFrame and the cached option chain

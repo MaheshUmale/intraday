@@ -224,7 +224,7 @@ class TradingBot:
             try:
                 # Fetch data for the last 10 days to ensure we get the last trading day
                 candles = self.data_handler.get_historical_candle_data(
-                    instrument_key, 'minutes', '1', to_date, from_date
+                    instrument_key, 'minutes', '1', from_date, to_date
                 )
 
                 if not candles:
@@ -235,11 +235,15 @@ class TradingBot:
                 df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-                # Find the most recent trading day from the data
-                last_trading_day = df['timestamp'].dt.date.max()
-                if pd.isna(last_trading_day):
-                    logging.warning(f"Could not determine the last trading day for {instrument_key}.")
+                # Get unique dates from the data and sort them in descending order
+                unique_dates = sorted(df['timestamp'].dt.date.unique(), reverse=True)
+
+                # The previous trading day is the second date in the sorted list
+                if len(unique_dates) < 2:
+                    logging.warning(f"Not enough unique trading days to determine the previous day for {instrument_key}.")
                     continue
+
+                last_trading_day = unique_dates[1]
 
                 # Filter data for the last trading day
                 last_day_data = df[df['timestamp'].dt.date == last_trading_day]
@@ -277,17 +281,7 @@ class TradingBot:
         hunter_zone = self.hunter_zone[instrument_key]
         opening_price = df['open'].iloc[0]
 
-        symbol = None
-        # Efficiently look up the symbol for the given instrument key.
-        if instrument_key.startswith('NSE_FO'):
-            # Use the pre-computed inverted map for O(1) lookup.
-            symbol = self.data_handler.instrument_to_symbol_map.get(instrument_key)
-        else:
-            # For indices, derive the symbol from the key itself.
-            if 'BANKNIFTY' in instrument_key or 'Nifty Bank' in instrument_key:
-                symbol = 'BANKNIFTY'
-            elif 'NIFTY' in instrument_key or 'Nifty 50' in instrument_key:
-                symbol = 'NIFTY'
+        symbol = self.get_symbol_from_instrument_key(instrument_key)
 
         # For spot indices (which don't have their own volume), substitute the volume
         # from their corresponding futures contract for more accurate indicator calculations.
@@ -363,6 +357,18 @@ class TradingBot:
                 timestamp=timestamp # Pass timestamp to strategy
             )
     
+    def get_symbol_from_instrument_key(self, instrument_key):
+        """
+        Efficiently retrieves the underlying symbol for a given instrument key.
+
+        Args:
+            instrument_key (str): The instrument key to look up.
+
+        Returns:
+            str: The corresponding symbol (e.g., 'NIFTY'), or None if not found.
+        """
+        return self.data_handler.instrument_to_symbol_map.get(instrument_key)
+
 import time
 import signal
 import sys
